@@ -55,17 +55,33 @@ MODEL_METRICS = {
 
 print(f"✅ Models loaded. CNN Acc: {MODEL_METRICS['cnn_accuracy']}, RF Acc: {MODEL_METRICS['rf_accuracy']}")
 
-# Database setup (PostgreSQL - Neon.tech)
+# Database setup (PostgreSQL - Neon.tech with pooler compatibility)
 DB_URL = os.environ.get('DATABASE_URL', '')
 
 def get_db():
+    """PostgreSQL bağlantısı oluşturur, timeout parametreleri ekler."""
     if not DB_URL:
         raise ValueError("DATABASE_URL ortam değişkeni tanımlı değil!")
-    return psycopg2.connect(DB_URL)
+    
+    # Timeout parametrelerini ekle (pooler uyumluluğu için)
+    if 'connect_timeout' not in DB_URL.lower():
+        separator = '&' if '?' in DB_URL else '?'
+        db_url_with_timeout = f"{DB_URL}{separator}connect_timeout=10"
+    else:
+        db_url_with_timeout = DB_URL
+    
+    # statement_timeout ve idle_in_transaction_session_timeout ekle
+    conn = psycopg2.connect(db_url_with_timeout)
+    conn.set_session(
+        autocommit=False,
+        options='-c statement_timeout=10000 -c idle_in_transaction_session_timeout=10000'
+    )
+    return conn
 
 def init_db():
-    conn = get_db()
+    """Veritabanı tablosunu oluşturur (idempotent)."""
     try:
+        conn = get_db()
         with conn.cursor() as cur:
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS predictions (
@@ -79,8 +95,12 @@ def init_db():
                 )
             ''')
             conn.commit()
+    except psycopg2.OperationalError as e:
+        print(f"⚠️ DB init warning (non-critical): {e}")
+    except Exception as e:
+        print(f"⚠️ DB init error: {e}")
     finally:
-        conn.close()
+        if 'conn' in locals() and conn: conn.close()
 
 init_db()
 
@@ -105,6 +125,7 @@ def index():
 
 @app.route('/predict_image', methods=['POST'])
 def predict_image():
+    """Görsel analiz endpoint'i - PostgreSQL ile kalıcı kayıt."""
     try:
         if 'image' not in request.files:
             return jsonify({"success": False, "error": "No image file provided"}), 400
@@ -132,9 +153,10 @@ def predict_image():
                 "error": "Görsel hantavirüs mikroskopi verisine benzemiyor. Lütfen uygun laboratuvar görseli yükleyin."
             }), 400
         
-        # Save to PostgreSQL
-        conn = get_db()
+        # Save to PostgreSQL (with graceful error handling)
+        conn = None
         try:
+            conn = get_db()
             with conn.cursor() as cur:
                 cur.execute('''
                     INSERT INTO predictions (timestamp, module_type, input_summary, prediction_result, confidence, model_accuracy)
@@ -148,8 +170,15 @@ def predict_image():
                     MODEL_METRICS['cnn_accuracy']
                 ))
                 conn.commit()
+        except psycopg2.OperationalError as e:
+            # Pooler timeout veya bağlantı hatası: Logla ama kullanıcıya başarı dön
+            print(f"⚠️ DB write failed (pooler/timeout): {e}")
+        except psycopg2.Error as e:
+            print(f"⚠️ DB write error: {e}")
+        except Exception as e:
+            print(f"⚠️ Unexpected DB error: {e}")
         finally:
-            conn.close()
+            if conn: conn.close()
         
         return jsonify({
             "success": True,
@@ -159,10 +188,12 @@ def predict_image():
         })
         
     except Exception as e:
+        print(f"❌ predict_image error: {e}")
         return jsonify({"success": False, "error": f"Processing error: {str(e)}"}), 500
 
 @app.route('/predict_risk', methods=['POST'])
 def predict_risk():
+    """Çevresel risk analiz endpoint'i - PostgreSQL ile kalıcı kayıt."""
     try:
         data = request.get_json()
         if not data:
@@ -188,9 +219,10 @@ def predict_risk():
         result = "Yüksek Risk" if risk_prob >= 0.5 else "Düşük Risk"
         risk_percentage = round(risk_prob * 100, 2)
         
-        # Save to PostgreSQL
-        conn = get_db()
+        # Save to PostgreSQL (with graceful error handling)
+        conn = None
         try:
+            conn = get_db()
             with conn.cursor() as cur:
                 input_summary = f"Region:{int(features[0])}, Temp:{features[1]}°C, Humidity:{features[2]}%, Rodent:{int(features[3])}/10"
                 cur.execute('''
@@ -205,8 +237,14 @@ def predict_risk():
                     MODEL_METRICS['rf_accuracy']
                 ))
                 conn.commit()
+        except psycopg2.OperationalError as e:
+            print(f"⚠️ DB write failed (pooler/timeout): {e}")
+        except psycopg2.Error as e:
+            print(f"⚠️ DB write error: {e}")
+        except Exception as e:
+            print(f"⚠️ Unexpected DB error: {e}")
         finally:
-            conn.close()
+            if conn: conn.close()
         
         return jsonify({
             "success": True,
@@ -217,6 +255,7 @@ def predict_risk():
         })
         
     except Exception as e:
+        print(f"❌ predict_risk error: {e}")
         return jsonify({"success": False, "error": f"Processing error: {str(e)}"}), 500
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -236,25 +275,45 @@ def login():
 @app.route('/admin')
 @admin_required
 def admin():
-    conn = get_db()
+    """Admin paneli - PostgreSQL'den kayıtları okur."""
+    records = []
+    conn = None
     try:
+        conn = get_db()
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute('SELECT * FROM predictions ORDER BY timestamp DESC LIMIT 50')
             records = [dict(row) for row in cur.fetchall()]
+    except psycopg2.OperationalError as e:
+        print(f"⚠️ Admin DB read failed: {e}")
+        # Hata durumunda boş liste döndür, sayfa çökmesin
+    except psycopg2.Error as e:
+        print(f"⚠️ Admin DB error: {e}")
+    except Exception as e:
+        print(f"⚠️ Unexpected admin error: {e}")
     finally:
-        conn.close()
+        if conn: conn.close()
+    
     return render_template('admin.html', records=records)
 
 @app.route('/admin/export_csv')
 @admin_required
 def export_csv():
-    conn = get_db()
+    """CSV export - PostgreSQL'den tüm kayıtları okur."""
+    records = []
+    conn = None
     try:
+        conn = get_db()
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute('SELECT * FROM predictions ORDER BY timestamp DESC')
             records = cur.fetchall()
+    except psycopg2.OperationalError as e:
+        print(f"⚠️ Export DB read failed: {e}")
+    except psycopg2.Error as e:
+        print(f"⚠️ Export DB error: {e}")
+    except Exception as e:
+        print(f"⚠️ Unexpected export error: {e}")
     finally:
-        conn.close()
+        if conn: conn.close()
     
     si = io.StringIO()
     cw = csv.writer(si)
@@ -274,13 +333,25 @@ def export_csv():
 @app.route('/admin/clear', methods=['POST'])
 @admin_required
 def clear_predictions():
-    conn = get_db()
+    """Tüm kayıtları sil - PostgreSQL."""
+    conn = None
     try:
+        conn = get_db()
         with conn.cursor() as cur:
             cur.execute('DELETE FROM predictions')
             conn.commit()
+    except psycopg2.OperationalError as e:
+        print(f"⚠️ Clear DB failed: {e}")
+        return jsonify({"success": False, "error": "Database operation failed"}), 500
+    except psycopg2.Error as e:
+        print(f"⚠️ Clear DB error: {e}")
+        return jsonify({"success": False, "error": "Database error"}), 500
+    except Exception as e:
+        print(f"⚠️ Unexpected clear error: {e}")
+        return jsonify({"success": False, "error": "Internal error"}), 500
     finally:
-        conn.close()
+        if conn: conn.close()
+    
     return jsonify({"success": True, "message": "All records deleted"})
 
 @app.route('/logout')
@@ -299,6 +370,7 @@ def not_found(e):
 
 @app.errorhandler(500)
 def internal_error(e):
+    print(f"❌ Internal error: {e}")
     return jsonify({"success": False, "error": "Internal server error"}), 500
 
 if __name__ == '__main__':
