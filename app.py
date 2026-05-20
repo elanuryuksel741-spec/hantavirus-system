@@ -9,10 +9,11 @@ import os
 import io
 import csv
 import json
-import sqlite3
 from datetime import datetime
 from functools import wraps
 
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import numpy as np
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, send_file
 from werkzeug.utils import secure_filename
@@ -21,19 +22,16 @@ import tensorflow as tf
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing import image as keras_image
 import joblib
+
 # Render Free Tier RAM/CPU Optimizasyonu
-import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Gereksiz logları kes
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0' # CPU overhead azalt
-import tensorflow as tf
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 tf.config.threading.set_intra_op_parallelism_threads(1)
 tf.config.threading.set_inter_op_parallelism_threads(1)
+
 # Initialize Flask app
 app = Flask(__name__)
-app.secret_key = 'hanta_secure_key_2024_change_in_production'
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload
-app.config['UPLOAD_FOLDER'] = 'uploads'
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+app.secret_key = os.environ.get('SECRET_KEY', 'hanta_secure_key_2024_change_in_production')
 
 # Load models and metrics
 print("🔧 Loading models...")
@@ -45,7 +43,6 @@ rf_scaler = rf_package['scaler']
 with open('models/metrics.json', 'r') as f:
     raw_metrics = json.load(f)
 
-# Prompt uyumlu fallback: eski/yeni format fark etmeksizin çalışır
 MODEL_METRICS = {
     "cnn_accuracy": raw_metrics.get("cnn_accuracy", 0.85),
     "rf_accuracy": raw_metrics.get("rf_accuracy", 0.80),
@@ -58,23 +55,33 @@ MODEL_METRICS = {
 
 print(f"✅ Models loaded. CNN Acc: {MODEL_METRICS['cnn_accuracy']}, RF Acc: {MODEL_METRICS['rf_accuracy']}")
 
-# Database setup
+# Database setup (PostgreSQL - Neon.tech)
+DB_URL = os.environ.get('DATABASE_URL', '')
+
+def get_db():
+    if not DB_URL:
+        raise ValueError("DATABASE_URL ortam değişkeni tanımlı değil!")
+    return psycopg2.connect(DB_URL)
+
 def init_db():
-    conn = sqlite3.connect('predictions.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS predictions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            module_type TEXT NOT NULL,
-            input_summary TEXT NOT NULL,
-            prediction_result TEXT NOT NULL,
-            confidence REAL NOT NULL,
-            model_accuracy REAL NOT NULL
-        )
-    ''')
-    conn.commit()
-    conn.close()
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS predictions (
+                    id SERIAL PRIMARY KEY,
+                    timestamp TEXT NOT NULL,
+                    module_type TEXT NOT NULL,
+                    input_summary TEXT NOT NULL,
+                    prediction_result TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    model_accuracy REAL NOT NULL
+                )
+            ''')
+            conn.commit()
+    finally:
+        conn.close()
+
 init_db()
 
 # Allowed file extensions
@@ -106,48 +113,43 @@ def predict_image():
         if file.filename == '' or not allowed_file(file.filename):
             return jsonify({"success": False, "error": "Invalid file type. Only JPG, JPEG, PNG allowed."}), 400
         
-        # Read and validate image
         img = Image.open(io.BytesIO(file.read())).convert('RGB')
         
-        # Minimum size check
         if img.width < 100 or img.height < 100:
             return jsonify({"success": False, "error": "Image too small. Minimum 100x100 pixels required."}), 400
         
-        # Preprocess for model
         img_resized = img.resize((224, 224))
         img_array = keras_image.img_to_array(img_resized) / 255.0
         img_array = np.expand_dims(img_array, axis=0)
         
-        # Predict
         prediction = cnn_model.predict(img_array, verbose=0)[0][0]
-        # ⚠️ DÜZELTME: flow_from_directory alfabetik sıraladığı için etiketler ters:
-        # class 0 = hantavirus, class 1 = normal → prediction < 0.5 ise hantavirus
         confidence = float(1 - prediction) if prediction < 0.5 else float(prediction)
         result = "Hantavirus Detected" if prediction < 0.5 else "Normal Tissue"
         
-        # Confidence threshold check
         if confidence < 0.60:
             return jsonify({
                 "success": False, 
                 "error": "Görsel hantavirüs mikroskopi verisine benzemiyor. Lütfen uygun laboratuvar görseli yükleyin."
             }), 400
         
-        # Save to database
-        conn = sqlite3.connect('predictions.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO predictions (timestamp, module_type, input_summary, prediction_result, confidence, model_accuracy)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (
-            datetime.now().isoformat(),
-            'visual_analysis',
-            f"Image: {secure_filename(file.filename)} ({img.width}x{img.height})",
-            result,
-            round(confidence, 4),
-            MODEL_METRICS['cnn_accuracy']
-        ))
-        conn.commit()
-        conn.close()
+        # Save to PostgreSQL
+        conn = get_db()
+        try:
+            with conn.cursor() as cur:
+                cur.execute('''
+                    INSERT INTO predictions (timestamp, module_type, input_summary, prediction_result, confidence, model_accuracy)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                ''', (
+                    datetime.now().isoformat(),
+                    'visual_analysis',
+                    f"Image: {secure_filename(file.filename)} ({img.width}x{img.height})",
+                    result,
+                    round(confidence, 4),
+                    MODEL_METRICS['cnn_accuracy']
+                ))
+                conn.commit()
+        finally:
+            conn.close()
         
         return jsonify({
             "success": True,
@@ -166,7 +168,6 @@ def predict_risk():
         if not data:
             return jsonify({"success": False, "error": "No data provided"}), 400
         
-        # Extract and validate inputs
         try:
             features = [
                 float(data['region']),
@@ -179,32 +180,33 @@ def predict_risk():
         except (KeyError, ValueError) as e:
             return jsonify({"success": False, "error": f"Invalid input format: {str(e)}"}), 400
         
-        # Scale and predict
         features_scaled = rf_scaler.transform([features])
         prediction = rf_model.predict_proba(features_scaled)[0]
-        risk_prob = float(prediction[1])  # Probability of high risk
+        risk_prob = float(prediction[1])
         confidence = float(max(prediction))
         
         result = "Yüksek Risk" if risk_prob >= 0.5 else "Düşük Risk"
         risk_percentage = round(risk_prob * 100, 2)
         
-        # Save to database
-        conn = sqlite3.connect('predictions.db')
-        cursor = conn.cursor()
-        input_summary = f"Region:{int(features[0])}, Temp:{features[1]}°C, Humidity:{features[2]}%, Rodent:{int(features[3])}/10"
-        cursor.execute('''
-            INSERT INTO predictions (timestamp, module_type, input_summary, prediction_result, confidence, model_accuracy)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (
-            datetime.now().isoformat(),
-            'environmental_risk',
-            input_summary,
-            f"{result} ({risk_percentage}%)",
-            round(confidence, 4),
-            MODEL_METRICS['rf_accuracy']
-        ))
-        conn.commit()
-        conn.close()
+        # Save to PostgreSQL
+        conn = get_db()
+        try:
+            with conn.cursor() as cur:
+                input_summary = f"Region:{int(features[0])}, Temp:{features[1]}°C, Humidity:{features[2]}%, Rodent:{int(features[3])}/10"
+                cur.execute('''
+                    INSERT INTO predictions (timestamp, module_type, input_summary, prediction_result, confidence, model_accuracy)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                ''', (
+                    datetime.now().isoformat(),
+                    'environmental_risk',
+                    input_summary,
+                    f"{result} ({risk_percentage}%)",
+                    round(confidence, 4),
+                    MODEL_METRICS['rf_accuracy']
+                ))
+                conn.commit()
+        finally:
+            conn.close()
         
         return jsonify({
             "success": True,
@@ -234,23 +236,25 @@ def login():
 @app.route('/admin')
 @admin_required
 def admin():
-    conn = sqlite3.connect('predictions.db')
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM predictions ORDER BY timestamp DESC LIMIT 50')
-    records = [dict(row) for row in cursor.fetchall()]
-    conn.close()
+    conn = get_db()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute('SELECT * FROM predictions ORDER BY timestamp DESC LIMIT 50')
+            records = [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
     return render_template('admin.html', records=records)
 
 @app.route('/admin/export_csv')
 @admin_required
 def export_csv():
-    conn = sqlite3.connect('predictions.db')
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM predictions ORDER BY timestamp DESC')
-    records = cursor.fetchall()
-    conn.close()
+    conn = get_db()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute('SELECT * FROM predictions ORDER BY timestamp DESC')
+            records = cur.fetchall()
+    finally:
+        conn.close()
     
     si = io.StringIO()
     cw = csv.writer(si)
@@ -270,11 +274,13 @@ def export_csv():
 @app.route('/admin/clear', methods=['POST'])
 @admin_required
 def clear_predictions():
-    conn = sqlite3.connect('predictions.db')
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM predictions')
-    conn.commit()
-    conn.close()
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute('DELETE FROM predictions')
+            conn.commit()
+    finally:
+        conn.close()
     return jsonify({"success": True, "message": "All records deleted"})
 
 @app.route('/logout')

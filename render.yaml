@@ -13,3 +13,7 @@
         value: "1"
       - key: TF_CPP_MIN_LOG_LEVEL
         value: "2"
+      - key: SECRET_KEY
+        value: "hanta_deploy_key_2024"
+      - key: DATABASE_URL
+        value: "postgresql://neondb_owner:npg_gJfDV6vW5ZGr@ep-green-flower-algjthjl-pooler.c-3.eu-central-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"

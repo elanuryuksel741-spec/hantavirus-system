@@ -1,0 +1,11 @@
+{
+  "cnn_accuracy": 0.9441,
+  "cnn_precision": 0.9239,
+  "cnn_recall": 0.9681,
+  "cnn_f1": 0.9455,
+  "cnn_roc_auc": 0.9871,
+  "rf_accuracy": 0.8583,
+  "rf_f1": 0.8976,
+  "test_samples_cnn": 4136,
+  "test_samples_rf": 240
+}
