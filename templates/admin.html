@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📊 Analiz Veritabanı Yönetimi</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes fadeIn { from { opacity:0; transform:translateY(10px) } to { opacity:1; transform:translateY(0) } }
+        .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-emerald-400 via-sky-500 to-violet-600 min-h-screen">
+    <div class="max-w-6xl mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="flex flex-col md:flex-row md:items-center md:justify-between mb-6 gap-4">
+            <h1 class="text-3xl font-bold text-gray-800 tracking-tight">📊 Analiz Veritabanı Yönetimi</h1>
+            <div class="flex gap-3">
+                <a href="/admin/export_csv" class="bg-gradient-to-r from-emerald-500 to-sky-500 hover:from-emerald-600 hover:to-sky-600 text-white font-semibold py-2 px-4 rounded-xl shadow hover:shadow-lg transition-all duration-300 flex items-center gap-2">
+                    📥 CSV İndir
+                </a>
+                <button onclick="clearData()" class="bg-gradient-to-r from-rose-500 to-orange-400 hover:from-rose-600 hover:to-orange-500 text-white font-semibold py-2 px-4 rounded-xl shadow hover:shadow-lg transition-all duration-300 flex items-center gap-2">
+                    🗑️ Tümünü Temizle
+                </button>
+                <a href="/logout" class="bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold py-2 px-4 rounded-xl transition-all duration-300">
+                    Çıkış Yap
+                </a>
+            </div>
+        </div>
+
+        <!-- Search -->
+        <div class="bg-white/90 backdrop-blur-md rounded-2xl shadow-xl border border-white/20 p-4 mb-6">
+            <input type="text" id="search-input" placeholder="🔍 Kayıt Ara (tarih, modül, sonuç...)" 
+                   class="bg-gray-50 border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-sky-300 focus:border-sky-400 transition-all outline-none w-full">
+        </div>
+
+        <!-- Table -->
+        <div class="bg-white/90 backdrop-blur-md rounded-2xl shadow-xl border border-white/20 overflow-hidden">
+            <div class="overflow-x-auto">
+                <table class="w-full text-left">
+                    <thead class="bg-gradient-to-r from-emerald-500 to-sky-500 text-white">
+                        <tr>
+                            <th class="px-4 py-3 font-semibold">Tarih</th>
+                            <th class="px-4 py-3 font-semibold">Modül</th>
+                            <th class="px-4 py-3 font-semibold">Girdi Özeti</th>
+                            <th class="px-4 py-3 font-semibold">Sonuç</th>
+                            <th class="px-4 py-3 font-semibold">Güven</th>
+                        </tr>
+                    </thead>
+                    <tbody id="records-body" class="divide-y divide-gray-100">
+                        {% for rec in records %}
+                        <tr class="hover:bg-gray-50 transition animate-fade-in" style="animation-delay: {{loop.index0 * 50}}ms">
+                            <td class="px-4 py-3 text-sm text-gray-600">{{ rec.timestamp[:19].replace('T', ' ') }}</td>
+                            <td class="px-4 py-3 text-sm">
+                                <span class="px-2 py-1 rounded-full text-xs font-medium {{ 'bg-amber-100 text-amber-800' if rec.module_type=='visual_analysis' else 'bg-sky-100 text-sky-800' }}">
+                                    {{ '🔬 Görsel' if rec.module_type=='visual_analysis' else '🌍 Çevresel' }}
+                                </span>
+                            </td>
+                            <td class="px-4 py-3 text-sm text-gray-700 max-w-xs truncate" title="{{ rec.input_summary }}">{{ rec.input_summary }}</td>
+                            <td class="px-4 py-3 text-sm font-medium {{ 'text-amber-700' if 'Yüksek' in rec.prediction_result or 'Detected' in rec.prediction_result else 'text-green-700' }}">
+                                {{ rec.prediction_result }}
+                            </td>
+                            <td class="px-4 py-3">
+                                <div class="flex items-center gap-2">
+                                    <div class="w-16 bg-gray-200 rounded-full h-2">
+                                        <div class="bg-gradient-to-r from-emerald-400 to-sky-500 h-2 rounded-full" style="width: {{ rec.confidence * 100 }}%"></div>
+                                    </div>
+                                    <span class="text-xs text-gray-600">%{{ (rec.confidence * 100)|round(1) }}</span>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if not records %}
+            <p class="text-center py-8 text-gray-500">Henüz kayıt bulunmuyor.</p>
+            {% endif %}
+        </div>
+
+        <!-- Footer -->
+        <footer class="text-xs text-gray-500 text-center py-4 border-t border-white/20 mt-6">
+            ⚠️ Bu sistem tıbbi tanı veya tedavi aracı değildir. Yalnızca eğitim ve demo amaçlıdır. Kesin sonuçlar için yetkili sağlık kuruluşlarına başvurunuz. KVKK/GDPR uyumlu olarak sadece analiz amaçlı önbellek tutulur.
+        </footer>
+    </div>
+
+    <script>
+        // Live search filter
+        document.getElementById('search-input').addEventListener('input', function(e) {
+            const term = e.target.value.toLowerCase();
+            document.querySelectorAll('#records-body tr').forEach(row => {
+                const text = row.textContent.toLowerCase();
+                row.style.display = text.includes(term) ? '' : 'none';
+            });
+        });
+
+        // Clear data with confirmation
+        async function clearData() {
+            if (!confirm('⚠️ Tüm analiz kayıtları silinecek. Emin misiniz?')) return;
+            
+            try {
+                const res = await fetch('/admin/clear', { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    location.reload();
+                } else {
+                    alert('Hata: ' + data.error);
+                }
+            } catch (err) {
+                alert('Bağlantı hatası: ' + err.message);
+            }
+        }
+    </script>
+</body>
+</html>

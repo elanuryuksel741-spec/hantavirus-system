@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🦠 Hantavirüs Çift Modül Analiz Sistemi</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes fadeIn { 
+            from { opacity:0; transform:translateY(10px) } 
+            to { opacity:1; transform:translateY(0) } 
+        }
+        .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
+        .tab-active { border-bottom: 3px solid #0ea5e9; color: #0369a1; font-weight: 600; }
+        .drag-over { border: 3px dashed #0ea5e9 !important; background: #f0f9ff !important; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-emerald-400 via-sky-500 to-violet-600 min-h-screen">
+    <div class="max-w-4xl mx-auto px-4 py-8">
+        <!-- Header -->
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-gray-800 tracking-tight mb-2">🦠 Hantavirüs Analiz Sistemi</h1>
+            <p class="text-gray-600 leading-relaxed">Çift Modül: Görsel Mikroskopi + Çevresel Risk Değerlendirmesi</p>
+            <a href="/login" class="inline-flex items-center mt-3 text-sm text-gray-700 hover:text-gray-900 transition">
+                🛡️ Yönetici Paneli
+            </a>
+        </header>
+
+        <!-- Main Card -->
+        <div class="bg-white/90 backdrop-blur-md rounded-2xl shadow-2xl border border-white/20 p-6 mb-6">
+            <!-- Tabs -->
+            <div class="flex border-b border-gray-200 mb-6">
+                <button id="tab-image" class="tab-active flex-1 py-3 px-4 text-center transition" onclick="switchTab('image')">
+                    🔬 Görsel Analiz
+                </button>
+                <button id="tab-risk" class="flex-1 py-3 px-4 text-center text-gray-500 hover:text-gray-700 transition" onclick="switchTab('risk')">
+                    🌍 Çevresel Risk
+                </button>
+            </div>
+
+            <!-- Image Analysis Tab -->
+            <div id="panel-image" class="tab-content">
+                <h2 class="text-2xl font-bold text-gray-800 tracking-tight mb-4">Mikroskopi Görseli Yükle</h2>
+                <p class="text-gray-600 leading-relaxed mb-4">Hantavirüs şüpheli doku örneklerinizi analiz edin. Desteklenen formatlar: JPG, JPEG, PNG (min. 100x100px)</p>
+                
+                <!-- Drop Zone -->
+                <div id="drop-zone" class="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-sky-400 transition bg-gray-50">
+                    <input type="file" id="image-input" accept="image/jpeg,image/png,image/jpg" class="hidden">
+                    <div id="drop-placeholder">
+                        <span class="text-4xl mb-2 block">📷</span>
+                        <p class="text-gray-600">Görseli sürükleyip bırakın veya <span class="text-sky-600 font-semibold">göz atın</span></p>
+                    </div>
+                    <img id="image-preview" class="hidden max-h-48 mx-auto rounded-lg shadow-md">
+                </div>
+
+                <!-- Analyze Button -->
+                <button id="analyze-btn" class="bg-gradient-to-r from-rose-500 to-orange-400 hover:from-rose-600 hover:to-orange-500 text-white font-semibold py-3 px-6 rounded-xl shadow-lg hover:shadow-xl hover:scale-[1.03] transition-all duration-300 mt-6 w-full disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                    🔍 Analiz Et
+                </button>
+
+                <!-- Loading -->
+                <div id="image-loading" class="hidden text-center py-6">
+                    <div class="animate-spin inline-block w-8 h-8 border-4 border-sky-300 border-t-sky-600 rounded-full"></div>
+                    <p class="text-gray-600 mt-2">Model analiz ediyor...</p>
+                </div>
+
+                <!-- Result -->
+                <div id="image-result" class="hidden mt-6 p-4 rounded-xl border-l-4 animate-fade-in"></div>
+            </div>
+
+            <!-- Environmental Risk Tab -->
+            <div id="panel-risk" class="tab-content hidden">
+                <h2 class="text-2xl font-bold text-gray-800 tracking-tight mb-4">Çevresel Risk Değerlendirmesi</h2>
+                <p class="text-gray-600 leading-relaxed mb-6">Bölgenizdeki hantavirüs kapma olasılığını 6 soru ile hesaplayın.</p>
+                
+                <form id="risk-form" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Bölgeniz <span class="text-gray-400 font-normal">(0: Avrupa/Türkiye, 1: Asya, 2: Amerika, 3: Diğer)</span>
+                        </label>
+                        <select name="region" required class="bg-gray-50 border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-sky-300 focus:border-sky-400 transition-all outline-none w-full">
+                            <option value="0">Avrupa/Türkiye</option>
+                            <option value="1">Asya</option>
+                            <option value="2">Amerika</option>
+                            <option value="3">Diğer</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Ortalama Günlük Sıcaklık (°C) <span class="text-gray-400 font-normal">(Hava durumu uygulamasından bakınız. Örn: 15-30)</span>
+                        </label>
+                        <input type="number" name="temperature" step="0.1" min="-10" max="50" required placeholder="Örn: 22.5" class="bg-gray-50 border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-sky-300 focus:border-sky-400 transition-all outline-none w-full">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Ortalama Nem (%) <span class="text-gray-400 font-normal">(Hava durumu uygulaması veya ev nem ölçeri. Örn: 40-80)</span>
+                        </label>
+                        <input type="number" name="humidity" min="0" max="100" required placeholder="Örn: 65" class="bg-gray-50 border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-sky-300 focus:border-sky-400 transition-all outline-none w-full">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Kemirgen (Fare/Sıçan) Gözlem Puanı 1-10 <span class="text-gray-400 font-normal">(1: Hiç yok, 5: Ara sıra, 10: Çiftlik/Orman kenarı/Çok sık)</span>
+                        </label>
+                        <input type="range" name="rodent_score" min="1" max="10" value="5" class="w-full" oninput="document.getElementById('rodent-val').textContent=this.value">
+                        <div class="text-center text-sm text-gray-600">Seçilen: <span id="rodent-val" class="font-semibold text-sky-600">5</span>/10</div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Yaşadığınız Yerleşim <span class="text-gray-400 font-normal">(0: Şehir/İlçe Merkezi, 1: Köy/Tarla/Orman Kenarı/Kırsal)</span>
+                        </label>
+                        <select name="is_rural" required class="bg-gray-50 border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-sky-300 focus:border-sky-400 transition-all outline-none w-full">
+                            <option value="0">Şehir/İlçe Merkezi</option>
+                            <option value="1">Köy/Tarla/Orman Kenarı/Kırsal</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Son 1 Yılda Bölgesel Hantavirüs Uyarısı <span class="text-gray-400 font-normal">(0: Duymadım, 1: Resmi haber/duyuru aldım)</span>
+                        </label>
+                        <select name="has_warning" required class="bg-gray-50 border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-sky-300 focus:border-sky-400 transition-all outline-none w-full">
+                            <option value="0">Duymadım</option>
+                            <option value="1">Resmi haber/duyuru aldım</option>
+                        </select>
+                    </div>
+                    
+                    <button type="submit" class="bg-gradient-to-r from-rose-500 to-orange-400 hover:from-rose-600 hover:to-orange-500 text-white font-semibold py-3 px-6 rounded-xl shadow-lg hover:shadow-xl hover:scale-[1.03] transition-all duration-300 w-full mt-2">
+                        📊 Risk Hesapla
+                    </button>
+                </form>
+
+                <!-- Loading -->
+                <div id="risk-loading" class="hidden text-center py-6">
+                    <div class="animate-spin inline-block w-8 h-8 border-4 border-sky-300 border-t-sky-600 rounded-full"></div>
+                    <p class="text-gray-600 mt-2">Risk modeli çalışıyor...</p>
+                </div>
+
+                <!-- Result -->
+                <div id="risk-result" class="hidden mt-6 p-4 rounded-xl border-l-4 animate-fade-in"></div>
+            </div>
+        </div>
+
+        <!-- Legal Footer -->
+        <footer class="text-xs text-gray-500 text-center py-4 border-t border-white/20">
+            ⚠️ Bu sistem tıbbi tanı veya tedavi aracı değildir. Yalnızca eğitim ve demo amaçlıdır. Kesin sonuçlar için yetkili sağlık kuruluşlarına başvurunuz. KVKK/GDPR uyumlu olarak sadece analiz amaçlı önbellek tutulur.
+        </footer>
+    </div>
+
+    <script>
+        // Tab switching
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+            document.querySelectorAll('[id^="tab-"]').forEach(el => {
+                el.classList.remove('tab-active');
+                el.classList.add('text-gray-500');
+            });
+            document.getElementById(`panel-${tab}`).classList.remove('hidden');
+            document.getElementById(`tab-${tab}`).classList.add('tab-active');
+            document.getElementById(`tab-${tab}`).classList.remove('text-gray-500');
+        }
+
+        // Image upload handling
+        const dropZone = document.getElementById('drop-zone');
+        const imageInput = document.getElementById('image-input');
+        const imagePreview = document.getElementById('image-preview');
+        const analyzeBtn = document.getElementById('analyze-btn');
+        let selectedImage = null;
+
+        dropZone.addEventListener('click', () => imageInput.click());
+        imageInput.addEventListener('change', handleImageSelect);
+        
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
+            dropZone.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); });
+        });
+        ['dragenter', 'dragover'].forEach(evt => {
+            dropZone.addEventListener(evt, () => dropZone.classList.add('drag-over'));
+        });
+        ['dragleave', 'drop'].forEach(evt => {
+            dropZone.addEventListener(evt, () => dropZone.classList.remove('drag-over'));
+        });
+        dropZone.addEventListener('drop', e => {
+            const file = e.dataTransfer.files[0];
+            if (file && file.type.match('image.*')) {
+                imageInput.files = e.dataTransfer.files;
+                handleImageSelect({target: imageInput});
+            }
+        });
+
+        function handleImageSelect(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                imagePreview.src = ev.target.result;
+                imagePreview.classList.remove('hidden');
+                document.getElementById('drop-placeholder').classList.add('hidden');
+                selectedImage = file;
+                analyzeBtn.disabled = false;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        analyzeBtn.addEventListener('click', async () => {
+            if (!selectedImage) return;
+            
+            const loading = document.getElementById('image-loading');
+            const resultBox = document.getElementById('image-result');
+            loading.classList.remove('hidden');
+            resultBox.classList.add('hidden');
+            analyzeBtn.disabled = true;
+
+            const formData = new FormData();
+            formData.append('image', selectedImage);
+
+            try {
+                const res = await fetch('/predict_image', { method: 'POST', body: formData });
+                const data = await res.json();
+                
+                resultBox.classList.remove('hidden', 'bg-gradient-to-r', 'from-green-100', 'to-emerald-100', 'border-green-500', 'text-green-800', 'from-amber-50', 'to-yellow-100', 'border-amber-500', 'text-amber-800', 'from-red-50', 'to-rose-100', 'border-red-500', 'text-red-800');
+                
+                if (data.success) {
+                    const isPositive = data.result.includes('Detected');
+                    resultBox.className = `p-4 rounded-xl border-l-4 animate-fade-in ${isPositive ? 'bg-gradient-to-r from-amber-50 to-yellow-100 border-amber-500 text-amber-800' : 'bg-gradient-to-r from-green-100 to-emerald-100 border-green-500 text-green-800'}`;
+                    resultBox.innerHTML = `
+                        <p class="font-semibold text-lg">📋 Sonuç: ${data.result}</p>
+                        <p class="text-sm mt-1">Model Güven Skoru: %${data.confidence}</p>
+                        <div class="w-full bg-gray-200 rounded-full h-2.5 mt-3">
+                            <div class="bg-gradient-to-r from-emerald-400 to-sky-500 h-2.5 rounded-full transition-all duration-1000" style="width: ${data.confidence}%"></div>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-2">Model Doğruluk Oranı: %${(data.model_accuracy * 100).toFixed(1)}</p>
+                    `;
+                } else {
+                    resultBox.className = 'p-4 rounded-xl border-l-4 animate-fade-in bg-gradient-to-r from-red-50 to-rose-100 border-red-500 text-red-800';
+                    resultBox.innerHTML = `<p class="font-semibold">❌ Hata: ${data.error}</p>`;
+                }
+            } catch (err) {
+                resultBox.className = 'p-4 rounded-xl border-l-4 animate-fade-in bg-gradient-to-r from-red-50 to-rose-100 border-red-500 text-red-800';
+                resultBox.innerHTML = `<p class="font-semibold">❌ Bağlantı hatası: ${err.message}</p>`;
+            } finally {
+                loading.classList.add('hidden');
+                analyzeBtn.disabled = !selectedImage;
+            }
+        });
+
+        // Risk form handling
+        document.getElementById('risk-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const loading = document.getElementById('risk-loading');
+            const resultBox = document.getElementById('risk-result');
+            
+            loading.classList.remove('hidden');
+            resultBox.classList.add('hidden');
+
+            const payload = {};
+            new FormData(form).forEach((v, k) => payload[k] = v);
+
+            try {
+                const res = await fetch('/predict_risk', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                
+                resultBox.classList.remove('hidden');
+                if (data.success) {
+                    const isHighRisk = data.result.includes('Yüksek');
+                    resultBox.className = `p-4 rounded-xl border-l-4 animate-fade-in ${isHighRisk ? 'bg-gradient-to-r from-amber-50 to-yellow-100 border-amber-500 text-amber-800' : 'bg-gradient-to-r from-green-100 to-emerald-100 border-green-500 text-green-800'}`;
+                    resultBox.innerHTML = `
+                        <p class="font-semibold text-lg">📊 Risk Sonucu: ${data.result}</p>
+                        <p class="text-sm mt-1">Hantavirüs Kapma Olasılığı: %${data.risk_percentage}</p>
+                        <p class="text-sm">Model Güven Skoru: %${data.confidence}</p>
+                        <div class="w-full bg-gray-200 rounded-full h-2.5 mt-3">
+                            <div class="bg-gradient-to-r from-emerald-400 to-sky-500 h-2.5 rounded-full transition-all duration-1000" style="width: ${data.confidence}%"></div>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-2">Model Doğruluk Oranı: %${(data.model_accuracy * 100).toFixed(1)}</p>
+                    `;
+                } else {
+                    resultBox.className = 'p-4 rounded-xl border-l-4 animate-fade-in bg-gradient-to-r from-red-50 to-rose-100 border-red-500 text-red-800';
+                    resultBox.innerHTML = `<p class="font-semibold">❌ Hata: ${data.error}</p>`;
+                }
+            } catch (err) {
+                resultBox.className = 'p-4 rounded-xl border-l-4 animate-fade-in bg-gradient-to-r from-red-50 to-rose-100 border-red-500 text-red-800';
+                resultBox.innerHTML = `<p class="font-semibold">❌ Bağlantı hatası: ${err.message}</p>`;
+            } finally {
+                loading.classList.add('hidden');
+            }
+        });
+
+        // Reset on tab change
+        document.querySelectorAll('[id^="tab-"]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.getElementById('image-result').classList.add('hidden');
+                document.getElementById('risk-result').classList.add('hidden');
+                imagePreview.classList.add('hidden');
+                document.getElementById('drop-placeholder').classList.remove('hidden');
+                imageInput.value = '';
+                selectedImage = null;
+                analyzeBtn.disabled = true;
+            });
+        });
+    </script>
+</body>
+</html>
