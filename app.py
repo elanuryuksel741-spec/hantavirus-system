@@ -9,6 +9,7 @@ import os
 import io
 import csv
 import json
+import threading
 from datetime import datetime
 from functools import wraps
 
@@ -125,7 +126,7 @@ def index():
 
 @app.route('/predict_image', methods=['POST'])
 def predict_image():
-    """Görsel analiz endpoint'i - PostgreSQL ile kalıcı kayıt."""
+    """Görsel analiz endpoint'i - Async DB yazma ile Render timeout önleme."""
     try:
         if 'image' not in request.files:
             return jsonify({"success": False, "error": "No image file provided"}), 400
@@ -153,39 +154,47 @@ def predict_image():
                 "error": "Görsel hantavirüs mikroskopi verisine benzemiyor. Lütfen uygun laboratuvar görseli yükleyin."
             }), 400
         
-        # Save to PostgreSQL (with graceful error handling)
-        conn = None
-        try:
-            conn = get_db()
-            with conn.cursor() as cur:
-                cur.execute('''
-                    INSERT INTO predictions (timestamp, module_type, input_summary, prediction_result, confidence, model_accuracy)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                ''', (
-                    datetime.now().isoformat(),
-                    'visual_analysis',
-                    f"Image: {secure_filename(file.filename)} ({img.width}x{img.height})",
-                    result,
-                    round(confidence, 4),
-                    MODEL_METRICS['cnn_accuracy']
-                ))
-                conn.commit()
-        except psycopg2.OperationalError as e:
-            # Pooler timeout veya bağlantı hatası: Logla ama kullanıcıya başarı dön
-            print(f"⚠️ DB write failed (pooler/timeout): {e}")
-        except psycopg2.Error as e:
-            print(f"⚠️ DB write error: {e}")
-        except Exception as e:
-            print(f"⚠️ Unexpected DB error: {e}")
-        finally:
-            if conn: conn.close()
-        
-        return jsonify({
+        # ✅ OPTIMIZASYON: Önce kullanıcıya yanıt döndür, DB yazma işlemini arka planda yap
+        response_data = {
             "success": True,
             "result": result,
             "confidence": round(confidence * 100, 2),
             "model_accuracy": MODEL_METRICS['cnn_accuracy']
-        })
+        }
+        
+        def save_to_db_async():
+            """DB INSERT işlemini arka planda yapar, kullanıcı beklemez."""
+            conn = None
+            try:
+                conn = get_db()
+                with conn.cursor() as cur:
+                    cur.execute('''
+                        INSERT INTO predictions (timestamp, module_type, input_summary, prediction_result, confidence, model_accuracy)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    ''', (
+                        datetime.now().isoformat(),
+                        'visual_analysis',
+                        f"Image: {secure_filename(file.filename)} ({img.width}x{img.height})",
+                        result,
+                        round(confidence, 4),
+                        MODEL_METRICS['cnn_accuracy']
+                    ))
+                    conn.commit()
+                print(f"✅ DB save success: {result}")
+            except psycopg2.OperationalError as e:
+                print(f"⚠️ DB write failed (pooler/timeout): {e}")
+            except psycopg2.Error as e:
+                print(f"⚠️ DB write error: {e}")
+            except Exception as e:
+                print(f"⚠️ Unexpected DB error: {e}")
+            finally:
+                if conn: conn.close()
+        
+        # Thread başlat (daemon=True: app kapanınca thread de kapanır)
+        threading.Thread(target=save_to_db_async, daemon=True).start()
+        
+        # Hemen kullanıcıya yanıt döndür (timeout önleme)
+        return jsonify(response_data)
         
     except Exception as e:
         print(f"❌ predict_image error: {e}")
@@ -193,7 +202,7 @@ def predict_image():
 
 @app.route('/predict_risk', methods=['POST'])
 def predict_risk():
-    """Çevresel risk analiz endpoint'i - PostgreSQL ile kalıcı kayıt."""
+    """Çevresel risk analiz endpoint'i - Async DB yazma ile Render timeout önleme."""
     try:
         data = request.get_json()
         if not data:
@@ -219,40 +228,47 @@ def predict_risk():
         result = "Yüksek Risk" if risk_prob >= 0.5 else "Düşük Risk"
         risk_percentage = round(risk_prob * 100, 2)
         
-        # Save to PostgreSQL (with graceful error handling)
-        conn = None
-        try:
-            conn = get_db()
-            with conn.cursor() as cur:
-                input_summary = f"Region:{int(features[0])}, Temp:{features[1]}°C, Humidity:{features[2]}%, Rodent:{int(features[3])}/10"
-                cur.execute('''
-                    INSERT INTO predictions (timestamp, module_type, input_summary, prediction_result, confidence, model_accuracy)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                ''', (
-                    datetime.now().isoformat(),
-                    'environmental_risk',
-                    input_summary,
-                    f"{result} ({risk_percentage}%)",
-                    round(confidence, 4),
-                    MODEL_METRICS['rf_accuracy']
-                ))
-                conn.commit()
-        except psycopg2.OperationalError as e:
-            print(f"⚠️ DB write failed (pooler/timeout): {e}")
-        except psycopg2.Error as e:
-            print(f"⚠️ DB write error: {e}")
-        except Exception as e:
-            print(f"⚠️ Unexpected DB error: {e}")
-        finally:
-            if conn: conn.close()
-        
-        return jsonify({
+        # ✅ OPTIMIZASYON: Önce yanıt döndür, DB'yi async yaz
+        response_data = {
             "success": True,
             "result": result,
             "risk_percentage": risk_percentage,
             "confidence": round(confidence * 100, 2),
             "model_accuracy": MODEL_METRICS['rf_accuracy']
-        })
+        }
+        
+        def save_to_db_async():
+            """DB INSERT işlemini arka planda yapar, kullanıcı beklemez."""
+            conn = None
+            try:
+                conn = get_db()
+                with conn.cursor() as cur:
+                    input_summary = f"Region:{int(features[0])}, Temp:{features[1]}°C, Humidity:{features[2]}%, Rodent:{int(features[3])}/10"
+                    cur.execute('''
+                        INSERT INTO predictions (timestamp, module_type, input_summary, prediction_result, confidence, model_accuracy)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    ''', (
+                        datetime.now().isoformat(),
+                        'environmental_risk',
+                        input_summary,
+                        f"{result} ({risk_percentage}%)",
+                        round(confidence, 4),
+                        MODEL_METRICS['rf_accuracy']
+                    ))
+                    conn.commit()
+                print(f"✅ DB save success: {result}")
+            except psycopg2.OperationalError as e:
+                print(f"⚠️ DB write failed (pooler/timeout): {e}")
+            except psycopg2.Error as e:
+                print(f"⚠️ DB write error: {e}")
+            except Exception as e:
+                print(f"⚠️ Unexpected DB error: {e}")
+            finally:
+                if conn: conn.close()
+        
+        threading.Thread(target=save_to_db_async, daemon=True).start()
+        
+        return jsonify(response_data)
         
     except Exception as e:
         print(f"❌ predict_risk error: {e}")
@@ -275,21 +291,27 @@ def login():
 @app.route('/admin')
 @admin_required
 def admin():
-    """Admin paneli - PostgreSQL'den kayıtları okur."""
+    """Admin paneli - PostgreSQL'den kayıtları okur, timeout fallback ile."""
     records = []
     conn = None
     try:
         conn = get_db()
+        # Admin sorgusu için daha agresif timeout (5 sn)
+        conn.set_session(options='-c statement_timeout=5000')
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute('SELECT * FROM predictions ORDER BY timestamp DESC LIMIT 50')
             records = [dict(row) for row in cur.fetchall()]
+        print(f"✅ Admin: {len(records)} records loaded")
     except psycopg2.OperationalError as e:
-        print(f"⚠️ Admin DB read failed: {e}")
-        # Hata durumunda boş liste döndür, sayfa çökmesin
+        print(f"⚠️ Admin DB timeout (showing empty): {e}")
+        # Timeout olursa boş liste döndür, sayfa çökmesin
+        records = []
     except psycopg2.Error as e:
         print(f"⚠️ Admin DB error: {e}")
+        records = []
     except Exception as e:
         print(f"⚠️ Unexpected admin error: {e}")
+        records = []
     finally:
         if conn: conn.close()
     
@@ -358,6 +380,23 @@ def clear_predictions():
 def logout():
     session.clear()
     return redirect(url_for('index'))
+
+# 🆕 Health Check Endpoint (Render/Debug için)
+@app.route('/health')
+def health_check():
+    """Render health check endpoint - DB bağlantısını test eder."""
+    status = {"status": "ok", "models_loaded": True}
+    try:
+        conn = get_db()
+        with conn.cursor() as cur:
+            cur.execute('SELECT 1')
+            cur.fetchone()
+        status["database"] = "connected"
+        conn.close()
+    except Exception as e:
+        status["database"] = f"error: {str(e)[:50]}"
+        status["status"] = "degraded"
+    return jsonify(status), 200
 
 # Error handlers
 @app.errorhandler(413)
