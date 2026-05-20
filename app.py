@@ -60,23 +60,22 @@ print(f"✅ Models loaded. CNN Acc: {MODEL_METRICS['cnn_accuracy']}, RF Acc: {MO
 DB_URL = os.environ.get('DATABASE_URL', '')
 
 def get_db():
-    """PostgreSQL bağlantısı oluşturur, timeout parametreleri ekler."""
+    """PostgreSQL bağlantısı oluşturur, timeout parametrelerini connection string'e ekler."""
     if not DB_URL:
         raise ValueError("DATABASE_URL ortam değişkeni tanımlı değil!")
     
-    # Timeout parametrelerini ekle (pooler uyumluluğu için)
-    if 'connect_timeout' not in DB_URL.lower():
-        separator = '&' if '?' in DB_URL else '?'
-        db_url_with_timeout = f"{DB_URL}{separator}connect_timeout=10"
-    else:
-        db_url_with_timeout = DB_URL
+    # Timeout parametrelerini connection string'e ekle
+    db_url = DB_URL
+    if 'connect_timeout' not in db_url.lower():
+        separator = '&' if '?' in db_url else '?'
+        db_url = f"{db_url}{separator}connect_timeout=10"
+    if 'statement_timeout' not in db_url.lower():
+        separator = '&' if '?' in db_url else '?'
+        # options parametresini doğru formatta ekle
+        db_url = f"{db_url}{separator}options='-c statement_timeout=10000'"
     
-    # statement_timeout ve idle_in_transaction_session_timeout ekle
-    conn = psycopg2.connect(db_url_with_timeout)
-    conn.set_session(
-        autocommit=False,
-        options='-c statement_timeout=10000 -c idle_in_transaction_session_timeout=10000'
-    )
+    # Bağlantıyı kur
+    conn = psycopg2.connect(db_url)
     return conn
 
 def init_db():
@@ -296,15 +295,14 @@ def admin():
     conn = None
     try:
         conn = get_db()
-        # Admin sorgusu için daha agresif timeout (5 sn)
-        conn.set_session(options='-c statement_timeout=5000')
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # ✅ Timeout'u SQL komutu ile ayarla (5 saniye max sorgu süresi)
+            cur.execute('SET statement_timeout TO 5000')
             cur.execute('SELECT * FROM predictions ORDER BY timestamp DESC LIMIT 50')
             records = [dict(row) for row in cur.fetchall()]
         print(f"✅ Admin: {len(records)} records loaded")
     except psycopg2.OperationalError as e:
         print(f"⚠️ Admin DB timeout (showing empty): {e}")
-        # Timeout olursa boş liste döndür, sayfa çökmesin
         records = []
     except psycopg2.Error as e:
         print(f"⚠️ Admin DB error: {e}")
