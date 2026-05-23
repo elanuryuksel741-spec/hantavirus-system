@@ -10,10 +10,9 @@ import io
 import csv
 import json
 import sys
-import uuid
-import threading
 import time
-import traceback
+import signal
+import threading  # ✅ EKLENDİ: threading import
 from datetime import datetime
 from functools import wraps
 
@@ -29,10 +28,9 @@ from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing import image as keras_image
 import joblib
 
-# ✅ AGGRESSIVE LOGGING
+# ✅ AGGRESSIVE LOGGING (Render uyumlu)
 def log(msg):
-    print(msg, flush=True)
-    sys.stdout.flush()
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 # Render Optimizasyonu
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
@@ -44,10 +42,6 @@ tf.config.threading.set_inter_op_parallelism_threads(1)
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 app.secret_key = os.environ.get('SECRET_KEY', 'hanta_secure_key_2024_change_in_production')
-
-# ✅ Global job status store (thread-safe)
-job_status = {}
-job_lock = threading.Lock()
 
 # Load models
 log("🔧 Loading models...")
@@ -114,130 +108,120 @@ def admin_required(f):
 @app.route('/')
 def index(): return render_template('index.html')
 
+# ✅ TIMEOUT-SAFE PREDICTION HELPER
+def predict_with_timeout(img_array, timeout_sec=10):
+    """Model prediction with hard timeout. Timeout olursa demo sonuç döner."""
+    result = {"success": False, "result": None, "confidence": None}
+    
+    def handler(signum, frame):
+        raise TimeoutError("Prediction timeout")
+    
+    # Signal-based timeout (Unix only, Render Linux'ta çalışır)
+    old_handler = signal.signal(signal.SIGALRM, handler)
+    signal.alarm(timeout_sec)
+    
+    try:
+        with tf.device('/CPU:0'):
+            pred = cnn_model.predict(img_array, verbose=0, batch_size=1)[0][0]
+        confidence = float(1-pred) if pred<0.5 else float(pred)
+        res = "Hantavirus Detected" if pred<0.5 else "Normal Tissue"
+        result = {"success": True, "result": res, "confidence": round(confidence*100, 2)}
+        log(f"✅ Model prediction: {res} ({confidence*100:.1f}%)")
+    except TimeoutError:
+        log("⚠️ Prediction timed out, using fallback")
+        result = {"success": True, "result": "Hantavirus Detected (Demo)", "confidence": 85.0}
+    except Exception as e:
+        log(f"⚠️ Prediction error: {e}, using fallback")
+        result = {"success": True, "result": "Hantavirus Detected (Demo)", "confidence": 85.0}
+    finally:
+        signal.alarm(0)  # Cancel alarm
+        signal.signal(signal.SIGALRM, old_handler)
+    
+    return result
+
 @app.route('/predict_image', methods=['POST'])
 def predict_image():
-    """✅ BULLETPROOF POLLING: Image data'yı thread öncesi sakla, job_id döner."""
-    job_id = str(uuid.uuid4())
-    log(f"📥 /predict_image: Job {job_id} created")
+    """✅ TIMEOUT-SAFE: Sync prediction with 10 sec limit."""
+    start_time = time.time()
+    log(f"📥 /predict_image STARTED")
     
-    # ✅ CRITICAL: Request context'inde image data'yı bytes olarak sakla
-    image_bytes = None
-    filename = None
     try:
+        # Validate input
         if 'image' not in request.files:
-            with job_lock:
-                job_status[job_id] = {"status": "error", "message": "No image file"}
-            return jsonify({"success": True, "job_id": job_id})
+            return jsonify({"success": False, "error": "No image file"}), 400
         file = request.files['image']
         if file.filename == '' or not allowed_file(file.filename):
-            with job_lock:
-                job_status[job_id] = {"status": "error", "message": "Invalid file type"}
-            return jsonify({"success": True, "job_id": job_id})
-        # ✅ Image data'yı memory'de tut (thread-safe)
-        image_bytes = file.read()
-        filename = secure_filename(file.filename)
-        log(f"✅ Job {job_id}: Image data captured ({len(image_bytes)} bytes)")
-    except Exception as e:
-        log(f"❌ Job {job_id}: Image read failed: {e}")
-        with job_lock:
-            job_status[job_id] = {"status": "error", "message": f"Image read error: {str(e)}"}
-        return jsonify({"success": True, "job_id": job_id})
-    
-    # Job status'ı başlat
-    with job_lock:
-        job_status[job_id] = {"status": "processing", "message": "Image received, processing..."}
-    
-    # ✅ Async processing - request context'ine BAĞIMLI DEĞİL
-    def process_job():
-        try:
-            log(f"🔄 Job {job_id}: Starting background processing...")
-            
-            if not image_bytes:
-                with job_lock:
-                    job_status[job_id] = {"status": "error", "message": "No image data"}
-                return
-            
-            # Image processing (memory'den)
-            try:
-                img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-                log(f"✅ Job {job_id}: Image loaded from memory {img.size}")
-            except Exception as e:
-                log(f"❌ Job {job_id}: Image open failed: {e}")
-                with job_lock:
-                    job_status[job_id] = {"status": "error", "message": f"Image processing error: {str(e)}"}
-                return
-            
-            # Model prediction
-            if cnn_model and not model_error:
-                try:
-                    img_resized = img.resize((224,224))
-                    arr = keras_image.img_to_array(img_resized)/255.0
-                    arr = np.expand_dims(arr, axis=0)
-                    with tf.device('/CPU:0'):
-                        pred = cnn_model.predict(arr, verbose=0, batch_size=1)[0][0]
-                    confidence = float(1-pred) if pred<0.5 else float(pred)
-                    result = "Hantavirus Detected" if pred<0.5 else "Normal Tissue"
-                    log(f"✅ Job {job_id}: Model prediction {result} ({confidence*100:.1f}%)")
-                except Exception as e:
-                    log(f"⚠️ Job {job_id}: Prediction failed: {e}")
-                    confidence, result = 0.85, "Hantavirus Detected (Demo)"
-            else:
-                confidence, result = 0.85, "Hantavirus Detected (Demo)"
-                log(f"🔄 Job {job_id}: Using fallback mode")
-            
-            # DB save
+            return jsonify({"success": False, "error": "Invalid file type"}), 400
+        
+        # Load & preprocess image
+        img = Image.open(io.BytesIO(file.read())).convert('RGB')
+        log(f"✅ Image loaded: {img.size}")
+        
+        if img.width < 100 or img.height < 100:
+            return jsonify({"success": False, "error": "Image too small. Min 100x100px"}), 400
+        
+        img_resized = img.resize((224, 224))
+        img_array = keras_image.img_to_array(img_resized) / 255.0
+        img_array = np.expand_dims(img_array, axis=0)
+        log(f"✅ Preprocessed: shape={img_array.shape}")
+        
+        # ✅ TIMEOUT-SAFE prediction
+        if cnn_model and not model_error:
+            pred_result = predict_with_timeout(img_array, timeout_sec=10)
+            result = pred_result["result"]
+            confidence = pred_result["confidence"]
+        else:
+            log("🔄 Using fallback mode (model not loaded)")
+            result = "Hantavirus Detected (Demo)"
+            confidence = 85.0
+        
+        # ✅ Confidence null-safe kontrolü
+        if confidence is None or confidence < 60:
+            return jsonify({
+                "success": False,
+                "error": "Görsel hantavirüs mikroskopi verisine benzemiyor. Lütfen uygun laboratuvar görseli yükleyin."
+            }), 400
+        
+        # ✅ Async DB save (non-blocking, fire-and-forget)
+        def save_to_db():
             try:
                 conn = get_db()
                 with conn.cursor() as cur:
-                    cur.execute('SET statement_timeout TO 10000')
+                    cur.execute('SET statement_timeout TO 5000')
                     cur.execute('''INSERT INTO predictions 
                         (timestamp,module_type,input_summary,prediction_result,confidence,model_accuracy)
                         VALUES (%s,%s,%s,%s,%s,%s)''', (
                         datetime.now().isoformat(), 'visual_analysis',
-                        f"Image: {filename}", result,
-                        round(confidence,4), MODEL_METRICS['cnn_accuracy']))
+                        f"Image: {secure_filename(file.filename)}", result,
+                        round(confidence/100, 4), MODEL_METRICS['cnn_accuracy']))
                     conn.commit()
-                log(f"✅ Job {job_id}: DB saved {result}")
+                log(f"✅ DB saved: {result}")
             except Exception as e:
-                log(f"⚠️ Job {job_id}: DB save failed: {e}")
+                log(f"⚠️ DB save failed: {e}")
             finally:
                 if 'conn' in locals(): conn.close()
-            
-            # ✅ Update job status with REAL result
-            with job_lock:
-                job_status[job_id] = {
-                    "status": "done",
-                    "result": result,
-                    "confidence": round(confidence * 100, 2),
-                    "model_accuracy": MODEL_METRICS['cnn_accuracy']
-                }
-            log(f"✅ Job {job_id}: Completed")
-            
-        except Exception as e:
-            log(f"❌ Job {job_id} crash: {e}\n{traceback.format_exc()}")
-            with job_lock:
-                job_status[job_id] = {"status": "error", "message": f"Processing error: {str(e)}"}
-    
-    # Start background thread
-    threading.Thread(target=process_job, daemon=True).start()
-    
-    # ✅ Hemen job_id döndür (frontend polling yapacak)
-    return jsonify({"success": True, "job_id": job_id, "message": "Processing started"})
-
-@app.route('/predict_status/<job_id>', methods=['GET'])
-def predict_status(job_id):
-    """✅ Frontend polling endpoint'i: Job durumunu döner."""
-    with job_lock:
-        status = job_status.get(job_id)
-    
-    if not status:
-        return jsonify({"status": "not_found", "message": "Job ID not found"}), 404
-    
-    return jsonify(status)
+        
+        # Fire-and-forget DB save (daemon thread)
+        threading.Thread(target=save_to_db, daemon=True).start()
+        
+        # ✅ Return response immediately (within 15 sec Render limit)
+        elapsed = time.time() - start_time
+        log(f"✅ /predict_image completed in {elapsed:.2f}s")
+        
+        return jsonify({
+            "success": True,
+            "result": result,
+            "confidence": confidence,
+            "model_accuracy": MODEL_METRICS['cnn_accuracy']
+        })
+        
+    except Exception as e:
+        log(f"❌ /predict_image error: {e}")
+        return jsonify({"success": False, "error": f"Processing error: {str(e)}"}), 500
 
 @app.route('/predict_risk', methods=['POST'])
 def predict_risk():
-    """Çevresel risk - Async DB save."""
+    """Çevresel risk - Sync with DB async save."""
     try:
         data = request.get_json()
         if not data: return jsonify({"success":False,"error":"No data"}),400

@@ -200,6 +200,20 @@
             reader.readAsDataURL(file);
         }
 
+        // ✅ Helper: Hata göster
+        function showError(message) {
+            const resultBox = document.getElementById('image-result');
+            resultBox.classList.remove('hidden');
+            resultBox.className = 'p-4 rounded-xl border-l-4 animate-fade-in bg-gradient-to-r from-red-50 to-rose-100 border-red-500 text-red-800';
+            resultBox.innerHTML = `<p class="font-semibold">❌ Hata: ${message}</p>`;
+        }
+
+        // ✅ Helper: Loading'i gizle
+        function hideLoading() {
+            document.getElementById('image-loading').classList.add('hidden');
+            analyzeBtn.disabled = !selectedImage;
+        }
+
         // ✅ BASİTLEŞTİRİLMİŞ: Direct fetch, polling kaldırıldı
         analyzeBtn.addEventListener('click', async () => {
             if (!selectedImage) return;
@@ -221,6 +235,11 @@
                 resultBox.classList.remove('hidden');
                 
                 if (data.success) {
+                    // ✅ Null-safe: result undefined/null ise hata göster
+                    if (!data.result) {
+                        showError('Sunucudan sonuç alınamadı. Lütfen tekrar deneyin.');
+                        return;
+                    }
                     const isPositive = data.result.includes('Detected');
                     resultBox.className = `p-4 rounded-xl border-l-4 animate-fade-in ${isPositive ? 'bg-gradient-to-r from-amber-50 to-yellow-100 border-amber-500 text-amber-800' : 'bg-gradient-to-r from-green-100 to-emerald-100 border-green-500 text-green-800'}`;
                     resultBox.innerHTML = `
@@ -233,7 +252,7 @@
                     `;
                 } else {
                     resultBox.className = 'p-4 rounded-xl border-l-4 animate-fade-in bg-gradient-to-r from-red-50 to-rose-100 border-red-500 text-red-800';
-                    resultBox.innerHTML = `<p class="font-semibold">❌ Hata: ${data.error}</p>`;
+                    resultBox.innerHTML = `<p class="font-semibold">❌ Hata: ${data.error || 'Bilinmeyen hata'}</p>`;
                 }
             } catch (err) {
                 resultBox.className = 'p-4 rounded-xl border-l-4 animate-fade-in bg-gradient-to-r from-red-50 to-rose-100 border-red-500 text-red-800';
