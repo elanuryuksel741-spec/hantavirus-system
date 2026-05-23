@@ -45,7 +45,7 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 app.secret_key = os.environ.get('SECRET_KEY', 'hanta_secure_key_2024_change_in_production')
 
-# Global job status store (in-memory, thread-safe with dict)
+# ✅ Global job status store (thread-safe)
 job_status = {}
 job_lock = threading.Lock()
 
@@ -116,34 +116,56 @@ def index(): return render_template('index.html')
 
 @app.route('/predict_image', methods=['POST'])
 def predict_image():
-    """✅ POLLING ÇÖZÜMÜ: Job ID döner, frontend status endpoint'ini sorgular."""
+    """✅ BULLETPROOF POLLING: Image data'yı thread öncesi sakla, job_id döner."""
     job_id = str(uuid.uuid4())
     log(f"📥 /predict_image: Job {job_id} created")
+    
+    # ✅ CRITICAL: Request context'inde image data'yı bytes olarak sakla
+    image_bytes = None
+    filename = None
+    try:
+        if 'image' not in request.files:
+            with job_lock:
+                job_status[job_id] = {"status": "error", "message": "No image file"}
+            return jsonify({"success": True, "job_id": job_id})
+        file = request.files['image']
+        if file.filename == '' or not allowed_file(file.filename):
+            with job_lock:
+                job_status[job_id] = {"status": "error", "message": "Invalid file type"}
+            return jsonify({"success": True, "job_id": job_id})
+        # ✅ Image data'yı memory'de tut (thread-safe)
+        image_bytes = file.read()
+        filename = secure_filename(file.filename)
+        log(f"✅ Job {job_id}: Image data captured ({len(image_bytes)} bytes)")
+    except Exception as e:
+        log(f"❌ Job {job_id}: Image read failed: {e}")
+        with job_lock:
+            job_status[job_id] = {"status": "error", "message": f"Image read error: {str(e)}"}
+        return jsonify({"success": True, "job_id": job_id})
     
     # Job status'ı başlat
     with job_lock:
         job_status[job_id] = {"status": "processing", "message": "Image received, processing..."}
     
-    # Async processing
+    # ✅ Async processing - request context'ine BAĞIMLI DEĞİL
     def process_job():
         try:
             log(f"🔄 Job {job_id}: Starting background processing...")
             
-            # Görüntüyü tekrar oku (request context'i thread'de yok, o yüzden dosyayı memory'de tutmamız gerek)
-            # Not: Bu demo için basit tutuyoruz; prodüksiyonda S3/blob storage kullanılır
-            if 'image' not in request.files:
+            if not image_bytes:
                 with job_lock:
-                    job_status[job_id] = {"status": "error", "message": "No image file"}
-                return
-            file = request.files['image']
-            if file.filename == '' or not allowed_file(file.filename):
-                with job_lock:
-                    job_status[job_id] = {"status": "error", "message": "Invalid file type"}
+                    job_status[job_id] = {"status": "error", "message": "No image data"}
                 return
             
-            # Image processing
-            img = Image.open(io.BytesIO(file.read())).convert('RGB')
-            log(f"✅ Job {job_id}: Image loaded {img.size}")
+            # Image processing (memory'den)
+            try:
+                img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+                log(f"✅ Job {job_id}: Image loaded from memory {img.size}")
+            except Exception as e:
+                log(f"❌ Job {job_id}: Image open failed: {e}")
+                with job_lock:
+                    job_status[job_id] = {"status": "error", "message": f"Image processing error: {str(e)}"}
+                return
             
             # Model prediction
             if cnn_model and not model_error:
@@ -172,7 +194,7 @@ def predict_image():
                         (timestamp,module_type,input_summary,prediction_result,confidence,model_accuracy)
                         VALUES (%s,%s,%s,%s,%s,%s)''', (
                         datetime.now().isoformat(), 'visual_analysis',
-                        f"Image: {secure_filename(file.filename)}", result,
+                        f"Image: {filename}", result,
                         round(confidence,4), MODEL_METRICS['cnn_accuracy']))
                     conn.commit()
                 log(f"✅ Job {job_id}: DB saved {result}")
@@ -181,7 +203,7 @@ def predict_image():
             finally:
                 if 'conn' in locals(): conn.close()
             
-            # Update job status with REAL result
+            # ✅ Update job status with REAL result
             with job_lock:
                 job_status[job_id] = {
                     "status": "done",
