@@ -200,7 +200,7 @@
             reader.readAsDataURL(file);
         }
 
-        // 🆕 POLLING: Gerçek model sonucu için job_id + status endpoint
+        // ✅ BASİTLEŞTİRİLMİŞ: Direct fetch, polling kaldırıldı
         analyzeBtn.addEventListener('click', async () => {
             if (!selectedImage) return;
             
@@ -213,101 +213,36 @@
             const formData = new FormData();
             formData.append('image', selectedImage);
 
-            let pollInterval = null;
-            let timeoutTimer = null;
-
             try {
-                // 1. Job başlat, job_id al
+                // ✅ DIRECT CALL: Backend timeout-safe, direkt yanıt döner
                 const res = await fetch('/predict_image', { method: 'POST', body: formData });
                 const data = await res.json();
                 
-                if (!data.success || !data.job_id) {
-                    showError(data.error || 'Job creation failed');
-                    return;
+                resultBox.classList.remove('hidden');
+                
+                if (data.success) {
+                    const isPositive = data.result.includes('Detected');
+                    resultBox.className = `p-4 rounded-xl border-l-4 animate-fade-in ${isPositive ? 'bg-gradient-to-r from-amber-50 to-yellow-100 border-amber-500 text-amber-800' : 'bg-gradient-to-r from-green-100 to-emerald-100 border-green-500 text-green-800'}`;
+                    resultBox.innerHTML = `
+                        <p class="font-semibold text-lg">📋 Sonuç: ${data.result}</p>
+                        <p class="text-sm mt-1">Model Güven Skoru: %${data.confidence}</p>
+                        <div class="w-full bg-gray-200 rounded-full h-2.5 mt-3">
+                            <div class="bg-gradient-to-r from-emerald-400 to-sky-500 h-2.5 rounded-full transition-all duration-1000" style="width: ${data.confidence}%"></div>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-2">Model Doğruluk Oranı: %${(data.model_accuracy * 100).toFixed(1)}</p>
+                    `;
+                } else {
+                    resultBox.className = 'p-4 rounded-xl border-l-4 animate-fade-in bg-gradient-to-r from-red-50 to-rose-100 border-red-500 text-red-800';
+                    resultBox.innerHTML = `<p class="font-semibold">❌ Hata: ${data.error}</p>`;
                 }
-                
-                const jobId = data.job_id;
-                console.log(`🔄 Job ${jobId} started, polling for status...`);
-                
-                // 2. Polling başlat: 1 sn aralıklarla /predict_status/<job_id> sorgula
-                pollInterval = setInterval(async () => {
-                    try {
-                        const statusRes = await fetch(`/predict_status/${jobId}`);
-                        const status = await statusRes.json();
-                        
-                        console.log(`📡 Polling: ${status.status}`, status);
-                        
-                        if (status.status === 'done') {
-                            // ✅ Gerçek sonuç geldi!
-                            clearInterval(pollInterval);
-                            clearTimeout(timeoutTimer);
-                            hideLoading();
-                            showRealResult({
-                                success: true,
-                                result: status.result,
-                                confidence: status.confidence,
-                                model_accuracy: status.model_accuracy
-                            });
-                        } else if (status.status === 'error') {
-                            // ❌ Hata durumu
-                            clearInterval(pollInterval);
-                            clearTimeout(timeoutTimer);
-                            hideLoading();
-                            showError(status.message || 'Processing failed');
-                        }
-                        // 'processing' ise polling devam eder
-                    } catch (err) {
-                        console.error('Polling fetch error:', err);
-                        // Network hatası olursa polling'i durdurma, bir sonraki denemede tekrar dene
-                    }
-                }, 1000); // 1 saniyede bir sorgula
-                
-                // 3. Timeout koruması: 30 sn'de polling'i durdur
-                timeoutTimer = setTimeout(() => {
-                    clearInterval(pollInterval);
-                    hideLoading();
-                    showError('Analysis timed out. Please try again with a smaller image.');
-                }, 30000);
-                
             } catch (err) {
-                clearInterval(pollInterval);
-                clearTimeout(timeoutTimer);
-                hideLoading();
-                showError('Request failed: ' + err.message);
+                resultBox.className = 'p-4 rounded-xl border-l-4 animate-fade-in bg-gradient-to-r from-red-50 to-rose-100 border-red-500 text-red-800';
+                resultBox.innerHTML = `<p class="font-semibold">❌ Bağlantı hatası: ${err.message}</p>`;
+            } finally {
+                loading.classList.add('hidden');
+                analyzeBtn.disabled = !selectedImage;
             }
         });
-
-        // 🆕 Helper: Gerçek sonucu göster (polling'den gelen veri ile)
-        function showRealResult(data) {
-            const resultBox = document.getElementById('image-result');
-            resultBox.classList.remove('hidden', 'bg-gradient-to-r', 'from-green-100', 'to-emerald-100', 'border-green-500', 'text-green-800', 'from-amber-50', 'to-yellow-100', 'border-amber-500', 'text-amber-800', 'from-red-50', 'to-rose-100', 'border-red-500', 'text-red-800');
-            
-            const isPositive = data.result.includes('Detected');
-            resultBox.className = `p-4 rounded-xl border-l-4 animate-fade-in ${isPositive ? 'bg-gradient-to-r from-amber-50 to-yellow-100 border-amber-500 text-amber-800' : 'bg-gradient-to-r from-green-100 to-emerald-100 border-green-500 text-green-800'}`;
-            
-            resultBox.innerHTML = `
-                <p class="font-semibold text-lg">📋 Sonuç: ${data.result}</p>
-                <p class="text-sm mt-1">Model Güven Skoru: %${data.confidence}</p>
-                <div class="w-full bg-gray-200 rounded-full h-2.5 mt-3">
-                    <div class="bg-gradient-to-r from-emerald-400 to-sky-500 h-2.5 rounded-full transition-all duration-1000" style="width: ${data.confidence}%"></div>
-                </div>
-                <p class="text-xs text-gray-500 mt-2">Model Doğruluk Oranı: %${(data.model_accuracy * 100).toFixed(1)}</p>
-            `;
-        }
-
-        // 🆕 Helper: Hata göster
-        function showError(message) {
-            const resultBox = document.getElementById('image-result');
-            resultBox.classList.remove('hidden');
-            resultBox.className = 'p-4 rounded-xl border-l-4 animate-fade-in bg-gradient-to-r from-red-50 to-rose-100 border-red-500 text-red-800';
-            resultBox.innerHTML = `<p class="font-semibold">❌ Hata: ${message}</p>`;
-        }
-
-        // 🆕 Helper: Loading'i gizle
-        function hideLoading() {
-            document.getElementById('image-loading').classList.add('hidden');
-            analyzeBtn.disabled = !selectedImage;
-        }
 
         // Risk form handling (değişmedi)
         document.getElementById('risk-form').addEventListener('submit', async (e) => {
@@ -369,4 +304,4 @@
         });
     </script>
 </body>
-</html> 
+</html>
