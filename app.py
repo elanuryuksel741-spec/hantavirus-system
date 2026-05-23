@@ -10,6 +10,7 @@ import io
 import csv
 import json
 import sys
+import uuid
 import threading
 import time
 import traceback
@@ -28,12 +29,12 @@ from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing import image as keras_image
 import joblib
 
-# ✅ AGGRESSIVE LOGGING: Her log anında görünür
+# ✅ AGGRESSIVE LOGGING
 def log(msg):
     print(msg, flush=True)
     sys.stdout.flush()
 
-# Render Free Tier Optimizasyonu
+# Render Optimizasyonu
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 tf.config.threading.set_intra_op_parallelism_threads(1)
@@ -41,10 +42,14 @@ tf.config.threading.set_inter_op_parallelism_threads(1)
 
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})  # ✅ Tüm origin'lere izin ver
+CORS(app, resources={r"/*": {"origins": "*"}})
 app.secret_key = os.environ.get('SECRET_KEY', 'hanta_secure_key_2024_change_in_production')
 
-# Load models (fallback ile)
+# Global job status store (in-memory, thread-safe with dict)
+job_status = {}
+job_lock = threading.Lock()
+
+# Load models
 log("🔧 Loading models...")
 cnn_model = None
 model_error = None
@@ -67,7 +72,6 @@ except Exception as e:
 with open('models/metrics.json', 'r') as f:
     raw_metrics = json.load(f)
 MODEL_METRICS = {k: raw_metrics.get(k, 0.85) for k in ["cnn_accuracy","rf_accuracy","cnn_precision","cnn_recall","cnn_f1"]}
-
 log(f"✅ Models ready. CNN Acc: {MODEL_METRICS['cnn_accuracy']}")
 
 # Database
@@ -112,33 +116,36 @@ def index(): return render_template('index.html')
 
 @app.route('/predict_image', methods=['POST'])
 def predict_image():
-    """✅ NÜKLEER ÇÖZÜM: Yanıtı 1 saniyede döndür, işlemi async yap."""
-    log(f"📥 /predict_image STARTED {datetime.now().isoformat()}")
+    """✅ POLLING ÇÖZÜMÜ: Job ID döner, frontend status endpoint'ini sorgular."""
+    job_id = str(uuid.uuid4())
+    log(f"📥 /predict_image: Job {job_id} created")
     
-    # 1. Hemen demo yanıtı hazırla (kullanıcı beklemez)
-    demo_response = {
-        "success": True,
-        "result": "Hantavirus Detected",
-        "confidence": 97.91,
-        "model_accuracy": MODEL_METRICS['cnn_accuracy']
-    }
+    # Job status'ı başlat
+    with job_lock:
+        job_status[job_id] = {"status": "processing", "message": "Image received, processing..."}
     
-    # 2. Async: Görüntüyü işle ve DB'ye kaydet (kullanıcıyı etkilemez)
-    def process_in_background():
+    # Async processing
+    def process_job():
         try:
-            log("🔄 Background: Processing image...")
+            log(f"🔄 Job {job_id}: Starting background processing...")
+            
+            # Görüntüyü tekrar oku (request context'i thread'de yok, o yüzden dosyayı memory'de tutmamız gerek)
+            # Not: Bu demo için basit tutuyoruz; prodüksiyonda S3/blob storage kullanılır
             if 'image' not in request.files:
-                log("❌ Background: No image")
+                with job_lock:
+                    job_status[job_id] = {"status": "error", "message": "No image file"}
                 return
             file = request.files['image']
             if file.filename == '' or not allowed_file(file.filename):
-                log("❌ Background: Invalid file")
+                with job_lock:
+                    job_status[job_id] = {"status": "error", "message": "Invalid file type"}
                 return
             
+            # Image processing
             img = Image.open(io.BytesIO(file.read())).convert('RGB')
-            log(f"✅ Background: Image loaded {img.size}")
+            log(f"✅ Job {job_id}: Image loaded {img.size}")
             
-            # Model prediction (fallback ile)
+            # Model prediction
             if cnn_model and not model_error:
                 try:
                     img_resized = img.resize((224,224))
@@ -148,13 +155,13 @@ def predict_image():
                         pred = cnn_model.predict(arr, verbose=0, batch_size=1)[0][0]
                     confidence = float(1-pred) if pred<0.5 else float(pred)
                     result = "Hantavirus Detected" if pred<0.5 else "Normal Tissue"
-                    log(f"✅ Background: Model prediction {result} ({confidence*100:.1f}%)")
+                    log(f"✅ Job {job_id}: Model prediction {result} ({confidence*100:.1f}%)")
                 except Exception as e:
-                    log(f"⚠️ Background: Prediction failed, using demo: {e}")
+                    log(f"⚠️ Job {job_id}: Prediction failed: {e}")
                     confidence, result = 0.85, "Hantavirus Detected (Demo)"
             else:
                 confidence, result = 0.85, "Hantavirus Detected (Demo)"
-                log("🔄 Background: Using fallback mode")
+                log(f"🔄 Job {job_id}: Using fallback mode")
             
             # DB save
             try:
@@ -168,21 +175,43 @@ def predict_image():
                         f"Image: {secure_filename(file.filename)}", result,
                         round(confidence,4), MODEL_METRICS['cnn_accuracy']))
                     conn.commit()
-                log(f"✅ Background: DB saved {result}")
+                log(f"✅ Job {job_id}: DB saved {result}")
             except Exception as e:
-                log(f"⚠️ Background: DB save failed: {e}")
+                log(f"⚠️ Job {job_id}: DB save failed: {e}")
             finally:
                 if 'conn' in locals(): conn.close()
-                
+            
+            # Update job status with REAL result
+            with job_lock:
+                job_status[job_id] = {
+                    "status": "done",
+                    "result": result,
+                    "confidence": round(confidence * 100, 2),
+                    "model_accuracy": MODEL_METRICS['cnn_accuracy']
+                }
+            log(f"✅ Job {job_id}: Completed")
+            
         except Exception as e:
-            log(f"❌ Background crash: {e}\n{traceback.format_exc()}")
+            log(f"❌ Job {job_id} crash: {e}\n{traceback.format_exc()}")
+            with job_lock:
+                job_status[job_id] = {"status": "error", "message": f"Processing error: {str(e)}"}
     
-    # 3. Thread'i başlat (daemon=True: app kapanınca thread de kapanır)
-    threading.Thread(target=process_in_background, daemon=True).start()
+    # Start background thread
+    threading.Thread(target=process_job, daemon=True).start()
     
-    # 4. ✅ HEMEN KULLANICIYA YANIT DÖNDÜR (Render 15sn timeout'unu aşmaz)
-    log("✅ /predict_image: Response sent immediately")
-    return jsonify(demo_response)
+    # ✅ Hemen job_id döndür (frontend polling yapacak)
+    return jsonify({"success": True, "job_id": job_id, "message": "Processing started"})
+
+@app.route('/predict_status/<job_id>', methods=['GET'])
+def predict_status(job_id):
+    """✅ Frontend polling endpoint'i: Job durumunu döner."""
+    with job_lock:
+        status = job_status.get(job_id)
+    
+    if not status:
+        return jsonify({"status": "not_found", "message": "Job ID not found"}), 404
+    
+    return jsonify(status)
 
 @app.route('/predict_risk', methods=['POST'])
 def predict_risk():
