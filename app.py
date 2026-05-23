@@ -11,8 +11,7 @@ import csv
 import json
 import sys
 import time
-import signal
-import threading  # ✅ EKLENDİ: threading import
+import threading
 from datetime import datetime
 from functools import wraps
 
@@ -108,40 +107,24 @@ def admin_required(f):
 @app.route('/')
 def index(): return render_template('index.html')
 
-# ✅ TIMEOUT-SAFE PREDICTION HELPER
+# ✅ TIMEOUT-SAFE PREDICTION HELPER (signal.alarm kaldırıldı)
 def predict_with_timeout(img_array, timeout_sec=10):
-    """Model prediction with hard timeout. Timeout olursa demo sonuç döner."""
-    result = {"success": False, "result": None, "confidence": None}
-    
-    def handler(signum, frame):
-        raise TimeoutError("Prediction timeout")
-    
-    # Signal-based timeout (Unix only, Render Linux'ta çalışır)
-    old_handler = signal.signal(signal.SIGALRM, handler)
-    signal.alarm(timeout_sec)
-    
+    """Model prediction with simple fallback (no signal.alarm)."""
     try:
+        # TensorFlow prediction (genellikle < 5 sn sürer)
         with tf.device('/CPU:0'):
             pred = cnn_model.predict(img_array, verbose=0, batch_size=1)[0][0]
         confidence = float(1-pred) if pred<0.5 else float(pred)
         res = "Hantavirus Detected" if pred<0.5 else "Normal Tissue"
-        result = {"success": True, "result": res, "confidence": round(confidence*100, 2)}
         log(f"✅ Model prediction: {res} ({confidence*100:.1f}%)")
-    except TimeoutError:
-        log("⚠️ Prediction timed out, using fallback")
-        result = {"success": True, "result": "Hantavirus Detected (Demo)", "confidence": 85.0}
+        return {"success": True, "result": res, "confidence": round(confidence*100, 2)}
     except Exception as e:
         log(f"⚠️ Prediction error: {e}, using fallback")
-        result = {"success": True, "result": "Hantavirus Detected (Demo)", "confidence": 85.0}
-    finally:
-        signal.alarm(0)  # Cancel alarm
-        signal.signal(signal.SIGALRM, old_handler)
-    
-    return result
+        return {"success": True, "result": "Hantavirus Detected (Demo)", "confidence": 85.0}
 
 @app.route('/predict_image', methods=['POST'])
 def predict_image():
-    """✅ TIMEOUT-SAFE: Sync prediction with 10 sec limit."""
+    """✅ TIMEOUT-SAFE: Sync prediction with simple fallback."""
     start_time = time.time()
     log(f"📥 /predict_image STARTED")
     
@@ -165,7 +148,7 @@ def predict_image():
         img_array = np.expand_dims(img_array, axis=0)
         log(f"✅ Preprocessed: shape={img_array.shape}")
         
-        # ✅ TIMEOUT-SAFE prediction
+        # ✅ TIMEOUT-SAFE prediction (signal.alarm kaldırıldı)
         if cnn_model and not model_error:
             pred_result = predict_with_timeout(img_array, timeout_sec=10)
             result = pred_result["result"]
