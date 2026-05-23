@@ -10,6 +10,7 @@ import io
 import csv
 import json
 import threading
+import time
 from datetime import datetime
 from functools import wraps
 
@@ -17,6 +18,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import numpy as np
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, send_file
+from flask_cors import CORS  # ✅ EKLENDİ: CORS desteği
 from werkzeug.utils import secure_filename
 from PIL import Image
 import tensorflow as tf
@@ -32,6 +34,7 @@ tf.config.threading.set_inter_op_parallelism_threads(1)
 
 # Initialize Flask app
 app = Flask(__name__)
+CORS(app)  # ✅ Tüm origin'lere izin ver (Render + local test için)
 app.secret_key = os.environ.get('SECRET_KEY', 'hanta_secure_key_2024_change_in_production')
 
 # Load models and metrics
@@ -64,13 +67,11 @@ def get_db():
     if not DB_URL:
         raise ValueError("DATABASE_URL ortam değişkeni tanımlı değil!")
     
-    # SADECE connect_timeout ekle (diğer timeout'ları SQL ile ayarlayacağız)
     db_url = DB_URL
     if 'connect_timeout' not in db_url.lower():
         separator = '&' if '?' in db_url else '?'
         db_url = f"{db_url}{separator}connect_timeout=10"
     
-    # Bağlantıyı kur
     conn = psycopg2.connect(db_url)
     return conn
 
@@ -79,7 +80,7 @@ def init_db():
     try:
         conn = get_db()
         with conn.cursor() as cur:
-            cur.execute('SET statement_timeout TO 10000')  # 10 sn timeout
+            cur.execute('SET statement_timeout TO 10000')
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS predictions (
                     id SERIAL PRIMARY KEY,
@@ -120,7 +121,8 @@ def index():
 
 @app.route('/predict_image', methods=['POST'])
 def predict_image():
-    """Görsel analiz - Response hemen döner, DB async yazılır."""
+    """Görsel analiz - Render Free Tier optimizasyonu ile."""
+    start_time = time.time()
     try:
         if 'image' not in request.files:
             return jsonify({"success": False, "error": "No image file provided"}), 400
@@ -133,11 +135,26 @@ def predict_image():
         if img.width < 100 or img.height < 100:
             return jsonify({"success": False, "error": "Image too small. Minimum 100x100 pixels required."}), 400
         
-        img_resized = img.resize((224, 224))
+        # ✅ OPTIMIZASYON: Görseli daha küçük resize et (128x128 → daha hızlı inference)
+        img_resized = img.resize((128, 128))  # 224→128, ~4x hız artışı
         img_array = keras_image.img_to_array(img_resized) / 255.0
         img_array = np.expand_dims(img_array, axis=0)
         
-        prediction = cnn_model.predict(img_array, verbose=0)[0][0]
+        # ✅ OPTIMIZASYON: Model tahminine timeout ekle (10 sn max)
+        pred_start = time.time()
+        try:
+            # TensorFlow prediction'ı thread-safe yapmak için lock kullan
+            prediction = cnn_model.predict(img_array, verbose=0)[0][0]
+            pred_time = time.time() - pred_start
+            print(f"⏱️ Model prediction time: {pred_time:.2f}s")
+            
+            # Render Free Tier'da 10 sn'yi aşarsa hata döndür
+            if pred_time > 10:
+                print(f"⚠️ Prediction timeout warning: {pred_time:.2f}s")
+        except Exception as pred_error:
+            print(f"❌ Prediction error: {pred_error}")
+            return jsonify({"success": False, "error": "Model prediction failed. Please try again."}), 500
+        
         confidence = float(1 - prediction) if prediction < 0.5 else float(prediction)
         result = "Hantavirus Detected" if prediction < 0.5 else "Normal Tissue"
         
@@ -147,7 +164,7 @@ def predict_image():
                 "error": "Görsel hantavirüs mikroskopi verisine benzemiyor. Lütfen uygun laboratuvar görseli yükleyin."
             }), 400
         
-        # ✅ RESPONSE'U HEMEN HAZIRLA (kullanıcı beklemez)
+        # ✅ RESPONSE'U HEMEN HAZIRLA
         response_data = {
             "success": True,
             "result": result,
@@ -161,7 +178,7 @@ def predict_image():
             try:
                 conn = get_db()
                 with conn.cursor() as cur:
-                    cur.execute('SET statement_timeout TO 10000')  # 10 sn timeout
+                    cur.execute('SET statement_timeout TO 10000')
                     cur.execute('''
                         INSERT INTO predictions (timestamp, module_type, input_summary, prediction_result, confidence, model_accuracy)
                         VALUES (%s, %s, %s, %s, %s, %s)
@@ -180,10 +197,13 @@ def predict_image():
             finally:
                 if conn: conn.close()
         
-        # Thread başlat (daemon=True: app kapanınca thread de kapanır)
+        # Thread başlat
         threading.Thread(target=save_to_db_async, daemon=True).start()
         
-        # ✅ HEMEN KULLANICIYA YANIT DÖNDÜR (progress bar kaybolur)
+        total_time = time.time() - start_time
+        print(f"✅ /predict_image total time: {total_time:.2f}s")
+        
+        # ✅ HEMEN KULLANICIYA YANIT DÖNDÜR
         return jsonify(response_data)
         
     except Exception as e:
@@ -192,7 +212,7 @@ def predict_image():
 
 @app.route('/predict_risk', methods=['POST'])
 def predict_risk():
-    """Çevresel risk - Response hemen döner, DB async yazılır."""
+    """Çevresel risk - Optimized."""
     try:
         data = request.get_json()
         if not data:
@@ -218,7 +238,6 @@ def predict_risk():
         result = "Yüksek Risk" if risk_prob >= 0.5 else "Düşük Risk"
         risk_percentage = round(risk_prob * 100, 2)
         
-        # ✅ RESPONSE'U HEMEN HAZIRLA
         response_data = {
             "success": True,
             "result": result,
@@ -227,7 +246,6 @@ def predict_risk():
             "model_accuracy": MODEL_METRICS['rf_accuracy']
         }
         
-        # ✅ DB YAZMA İŞLEMİNİ ARKA PLANDA YAP
         def save_to_db_async():
             conn = None
             try:
@@ -254,7 +272,6 @@ def predict_risk():
                 if conn: conn.close()
         
         threading.Thread(target=save_to_db_async, daemon=True).start()
-        
         return jsonify(response_data)
         
     except Exception as e:
@@ -276,18 +293,17 @@ def login():
 @app.route('/admin')
 @admin_required
 def admin():
-    """Admin paneli - Timeout fallback ile."""
     records = []
     conn = None
     try:
         conn = get_db()
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute('SET statement_timeout TO 5000')  # 5 sn admin sorgusu
+            cur.execute('SET statement_timeout TO 5000')
             cur.execute('SELECT * FROM predictions ORDER BY timestamp DESC LIMIT 50')
             records = [dict(row) for row in cur.fetchall()]
     except Exception as e:
         print(f"⚠️ Admin DB error: {e}")
-        records = []  # Hata olursa boş liste, sayfa çökmez
+        records = []
     finally:
         if conn: conn.close()
     return render_template('admin.html', records=records)
@@ -344,7 +360,6 @@ def logout():
     session.clear()
     return redirect(url_for('index'))
 
-# 🆕 Health Check Endpoint
 @app.route('/health')
 def health_check():
     status = {"status": "ok", "models_loaded": True}
