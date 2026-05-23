@@ -11,6 +11,7 @@ import csv
 import json
 import threading
 import time
+import traceback
 from datetime import datetime
 from functools import wraps
 
@@ -18,7 +19,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import numpy as np
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, send_file
-from flask_cors import CORS  # ✅ EKLENDİ: CORS desteği
+from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from PIL import Image
 import tensorflow as tf
@@ -34,7 +35,7 @@ tf.config.threading.set_inter_op_parallelism_threads(1)
 
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app)  # ✅ Tüm origin'lere izin ver (Render + local test için)
+CORS(app)
 app.secret_key = os.environ.get('SECRET_KEY', 'hanta_secure_key_2024_change_in_production')
 
 # Load models and metrics
@@ -59,24 +60,19 @@ MODEL_METRICS = {
 
 print(f"✅ Models loaded. CNN Acc: {MODEL_METRICS['cnn_accuracy']}, RF Acc: {MODEL_METRICS['rf_accuracy']}")
 
-# Database setup (PostgreSQL - Neon.tech)
+# Database setup
 DB_URL = os.environ.get('DATABASE_URL', '')
 
 def get_db():
-    """PostgreSQL bağlantısı oluşturur - SADECE connect_timeout kullanır."""
     if not DB_URL:
         raise ValueError("DATABASE_URL ortam değişkeni tanımlı değil!")
-    
     db_url = DB_URL
     if 'connect_timeout' not in db_url.lower():
         separator = '&' if '?' in db_url else '?'
         db_url = f"{db_url}{separator}connect_timeout=10"
-    
-    conn = psycopg2.connect(db_url)
-    return conn
+    return psycopg2.connect(db_url)
 
 def init_db():
-    """Veritabanı tablosunu oluşturur (idempotent)."""
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -100,12 +96,10 @@ def init_db():
 
 init_db()
 
-# Allowed file extensions
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# Admin login decorator
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -114,49 +108,60 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# Routes
 @app.route('/')
 def index():
     return render_template('index.html')
 
 @app.route('/predict_image', methods=['POST'])
 def predict_image():
-    """Görsel analiz - Render Free Tier optimizasyonu ile."""
+    """Görsel analiz - 224x224 resize + detaylı hata loglama."""
     start_time = time.time()
     try:
+        print(f"📥 /predict_image request started at {datetime.now().isoformat()}")
+        
         if 'image' not in request.files:
+            print("❌ No image file in request")
             return jsonify({"success": False, "error": "No image file provided"}), 400
         
         file = request.files['image']
         if file.filename == '' or not allowed_file(file.filename):
+            print(f"❌ Invalid file: {file.filename}")
             return jsonify({"success": False, "error": "Invalid file type. Only JPG, JPEG, PNG allowed."}), 400
         
-        img = Image.open(io.BytesIO(file.read())).convert('RGB')
+        # Load and validate image
+        try:
+            img = Image.open(io.BytesIO(file.read())).convert('RGB')
+            print(f"✅ Image loaded: {img.size}")
+        except Exception as e:
+            print(f"❌ Image load error: {e}")
+            return jsonify({"success": False, "error": f"Image processing error: {str(e)}"}), 400
+        
         if img.width < 100 or img.height < 100:
             return jsonify({"success": False, "error": "Image too small. Minimum 100x100 pixels required."}), 400
         
-        # ✅ OPTIMIZASYON: Görseli daha küçük resize et (128x128 → daha hızlı inference)
-        img_resized = img.resize((128, 128))  # 224→128, ~4x hız artışı
+        # ✅ OPTIMIZASYON: 224x224 resize (MobileNetV2 requirement)
+        img_resized = img.resize((224, 224))
         img_array = keras_image.img_to_array(img_resized) / 255.0
         img_array = np.expand_dims(img_array, axis=0)
+        print(f"✅ Preprocessed: shape={img_array.shape}")
         
-        # ✅ OPTIMIZASYON: Model tahminine timeout ekle (10 sn max)
+        # ✅ Model prediction with detailed error handling
         pred_start = time.time()
         try:
-            # TensorFlow prediction'ı thread-safe yapmak için lock kullan
-            prediction = cnn_model.predict(img_array, verbose=0)[0][0]
+            # TensorFlow prediction - thread-safe with lock
+            with tf.device('/CPU:0'):  # Explicit CPU placement
+                prediction = cnn_model.predict(img_array, verbose=0)[0][0]
             pred_time = time.time() - pred_start
-            print(f"⏱️ Model prediction time: {pred_time:.2f}s")
-            
-            # Render Free Tier'da 10 sn'yi aşarsa hata döndür
-            if pred_time > 10:
-                print(f"⚠️ Prediction timeout warning: {pred_time:.2f}s")
+            print(f"⏱️ Model prediction time: {pred_time:.2f}s, raw output: {prediction:.4f}")
         except Exception as pred_error:
             print(f"❌ Prediction error: {pred_error}")
+            print(traceback.format_exc())
             return jsonify({"success": False, "error": "Model prediction failed. Please try again."}), 500
         
+        # Calculate result
         confidence = float(1 - prediction) if prediction < 0.5 else float(prediction)
         result = "Hantavirus Detected" if prediction < 0.5 else "Normal Tissue"
+        print(f"✅ Result: {result}, confidence: {confidence*100:.2f}%")
         
         if confidence < 0.60:
             return jsonify({
@@ -164,7 +169,7 @@ def predict_image():
                 "error": "Görsel hantavirüs mikroskopi verisine benzemiyor. Lütfen uygun laboratuvar görseli yükleyin."
             }), 400
         
-        # ✅ RESPONSE'U HEMEN HAZIRLA
+        # Prepare response
         response_data = {
             "success": True,
             "result": result,
@@ -172,7 +177,7 @@ def predict_image():
             "model_accuracy": MODEL_METRICS['cnn_accuracy']
         }
         
-        # ✅ DB YAZMA İŞLEMİNİ ARKA PLANDA YAP
+        # Async DB save
         def save_to_db_async():
             conn = None
             try:
@@ -197,17 +202,16 @@ def predict_image():
             finally:
                 if conn: conn.close()
         
-        # Thread başlat
         threading.Thread(target=save_to_db_async, daemon=True).start()
         
         total_time = time.time() - start_time
-        print(f"✅ /predict_image total time: {total_time:.2f}s")
+        print(f"✅ /predict_image completed in {total_time:.2f}s")
         
-        # ✅ HEMEN KULLANICIYA YANIT DÖNDÜR
         return jsonify(response_data)
         
     except Exception as e:
-        print(f"❌ predict_image error: {e}")
+        print(f"❌ predict_image unexpected error: {e}")
+        print(traceback.format_exc())
         return jsonify({"success": False, "error": f"Processing error: {str(e)}"}), 500
 
 @app.route('/predict_risk', methods=['POST'])
@@ -301,6 +305,7 @@ def admin():
             cur.execute('SET statement_timeout TO 5000')
             cur.execute('SELECT * FROM predictions ORDER BY timestamp DESC LIMIT 50')
             records = [dict(row) for row in cur.fetchall()]
+        print(f"✅ Admin: {len(records)} records loaded")
     except Exception as e:
         print(f"⚠️ Admin DB error: {e}")
         records = []
@@ -376,7 +381,6 @@ def health_check():
         status["status"] = "degraded"
     return jsonify(status), 200
 
-# Error handlers
 @app.errorhandler(413)
 def file_too_large(e):
     return jsonify({"success": False, "error": "File too large. Maximum 16MB allowed."}), 413
