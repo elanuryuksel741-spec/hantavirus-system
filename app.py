@@ -65,7 +65,7 @@ def load_cnn_model():
             model_load_error = str(e)
             log(f"⚠️ CNN load failed: {e}")
 
-# RF model (lightweight, hemen yükle)
+# RF model (lightweight)
 log("🔧 Loading RF model...")
 rf_model = rf_scaler = None
 try:
@@ -124,27 +124,72 @@ def index():
         load_cnn_model()
     return render_template('index.html')
 
-# ✅ SADECE GERÇEK MODEL, FALLBACK YOK
-def predict_image_model(img_array):
-    """Sadece gerçek TensorFlow modelini kullanır."""
-    if cnn_model is None:
-        raise RuntimeError("CNN model not loaded")
+# ✅ ÇOK KATMANLI GÖRÜNTÜ VALIDASYONU
+def validate_microscopy_image(img_pil):
+    """
+    Görüntünün mikroskopi görseli olup olmadığını kontrol eder.
+    H&E boyama karakteristiklerini, texture ve renk çeşitliliğini analiz eder.
+    """
+    img_array = np.array(img_pil)
     
-    import tensorflow as tf
-    log("🧠 Running real model prediction...")
+    # 1. HSV Renk Uzayı Analizi (H&E boyama: pembe/mor tonları)
+    img_hsv = np.array(img_pil.convert('HSV'))
+    h_channel = img_hsv[:,:,0]  # Hue: 0-255 (PIL HSV)
+    s_channel = img_hsv[:,:,1]  # Saturation: 0-255
     
-    with tf.device('/CPU:0'):
-        pred = cnn_model.predict(img_array, verbose=0, batch_size=1)[0][0]
+    # H&E boyama karakteristikleri:
+    # - Pembe/Mor: H: 140-200, S: 40-220
+    # - Mavi (çekirdek): H: 100-140, S: 50-200
+    pink_mask = ((h_channel >= 140) & (h_channel <= 200) & 
+                 (s_channel >= 40) & (s_channel <= 220))
+    blue_mask = ((h_channel >= 100) & (h_channel <= 140) & 
+                 (s_channel >= 50) & (s_channel <= 200))
     
-    confidence = float(1-pred) if pred<0.5 else float(pred)
-    result = "Hantavirus Detected" if pred<0.5 else "Normal Tissue"
+    pink_ratio = np.mean(pink_mask)
+    blue_ratio = np.mean(blue_mask)
+    he_stain_ratio = pink_ratio + blue_ratio  # H&E boyama oranı
     
-    log(f"✅ Model prediction: {result} ({confidence*100:.1f}%)")
-    return result, round(confidence*100, 2)
+    # 2. Texture Analizi (Laplacian variance)
+    gray = np.mean(img_array, axis=2).astype(np.float32)
+    # Basit Laplacian kernel
+    laplacian = np.abs(
+        -4 * gray[1:-1, 1:-1] + 
+        gray[:-2, 1:-1] + gray[2:, 1:-1] + 
+        gray[1:-1, :-2] + gray[1:-1, 2:]
+    )
+    texture_score = np.mean(laplacian)
+    
+    # 3. Renk Çeşitliliği (standart sapma)
+    color_std = np.std(img_array, axis=(0,1)).mean()
+    
+    # 4. Kontrast analizi
+    contrast = np.std(gray)
+    
+    # ✅ Karar Kriterleri
+    is_valid = (
+        he_stain_ratio > 0.03 and      # En az %3 H&E boyalı piksel
+        texture_score > 3.0 and         # Yeterli texture (hücre yapıları)
+        color_std > 25 and              # Renk çeşitliliği (düz renkli logoları reddet)
+        contrast > 30                   # Yeterli kontrast
+    )
+    
+    metrics = {
+        'he_stain_ratio': he_stain_ratio,
+        'pink_ratio': pink_ratio,
+        'blue_ratio': blue_ratio,
+        'texture_score': texture_score,
+        'color_std': color_std,
+        'contrast': contrast
+    }
+    
+    log(f"🔍 Image validation: HE={he_stain_ratio:.3f}, Texture={texture_score:.2f}, "
+        f"ColorStd={color_std:.2f}, Contrast={contrast:.2f} → {'✅ Valid' if is_valid else '❌ Invalid'}")
+    
+    return is_valid, metrics
 
 @app.route('/predict_image', methods=['POST'])
 def predict_image():
-    """✅ SADECE GERÇEK MODEL, sahte görseller reddedilir."""
+    """✅ ÇOK KATMANLI: Görüntü validasyonu + gerçek model."""
     start_time = time.time()
     log(f"📥 /predict_image STARTED")
     
@@ -165,6 +210,19 @@ def predict_image():
         if img.width < 100 or img.height < 100:
             return jsonify({"success": False, "error": "Image too small. Min 100x100px"}), 400
         
+        # ✅ KATMAN 1: Görüntü Validasyonu (sahte görselleri reddet)
+        is_valid, validation_metrics = validate_microscopy_image(img)
+        
+        if not is_valid:
+            log(f"❌ Image rejected: Not a microscopy image")
+            return jsonify({
+                "success": False,
+                "error": "Bu görsel bir hantavirüs mikroskopi görüntüsü değil. "
+                         "Lütfen H&E boyalı mikroskopi görüntüsü, hücre preparatı veya doku kesiti yükleyin. "
+                         "Logo, fotoğraf, çizim gibi görseller kabul edilmez."
+            }), 400
+        
+        # ✅ KATMAN 2: Model Inference
         img_resized = img.resize((224, 224))
         
         import tensorflow as tf
@@ -173,7 +231,6 @@ def predict_image():
         img_array = np.expand_dims(img_array, axis=0)
         log(f"✅ Preprocessed: shape={img_array.shape}")
         
-        # ✅ SADECE GERÇEK MODEL (fallback yok)
         if cnn_model is None:
             return jsonify({
                 "success": False,
@@ -181,7 +238,15 @@ def predict_image():
             }), 503
         
         try:
-            result, confidence = predict_image_model(img_array)
+            log("🧠 Running real model prediction...")
+            with tf.device('/CPU:0'):
+                pred = cnn_model.predict(img_array, verbose=0, batch_size=1)[0][0]
+            
+            confidence = float(1-pred) if pred<0.5 else float(pred)
+            result = "Hantavirus Detected" if pred<0.5 else "Normal Tissue"
+            confidence_pct = round(confidence*100, 2)
+            
+            log(f"✅ Model prediction: {result} ({confidence_pct}%)")
         except Exception as e:
             log(f"❌ Model prediction failed: {e}")
             return jsonify({
@@ -189,12 +254,13 @@ def predict_image():
                 "error": "Model analizi başarısız oldu. Lütfen tekrar deneyin."
             }), 500
         
-        # ✅ YÜKSEK CONFIDENCE THRESHOLD (sahte görselleri reddet)
-        if confidence < 75:  # 60% → 75% yükseltildi
-            log(f"⚠️ Low confidence ({confidence}%), rejecting image")
+        # ✅ KATMAN 3: Confidence Threshold
+        if confidence_pct < 75:
+            log(f"⚠️ Low confidence ({confidence_pct}%), rejecting")
             return jsonify({
                 "success": False,
-                "error": "Bu görsel hantavirüs mikroskopi verisine benzemiyor. Lütfen uygun bir laboratuvar görseli yükleyin (mikroskopi görüntüsü, hücre preparatı vb.)."
+                "error": "Bu görsel hantavirüs mikroskopi verisine benzemiyor. "
+                         "Lütfen uygun bir laboratuvar görseli yükleyin."
             }), 400
         
         # ✅ Async DB save
@@ -208,7 +274,7 @@ def predict_image():
                         VALUES (%s,%s,%s,%s,%s,%s)''', (
                         datetime.now().isoformat(), 'visual_analysis',
                         f"Image: {secure_filename(file.filename)} ({img.width}x{img.height})",
-                        result, round(confidence/100, 4), MODEL_METRICS['cnn_accuracy']))
+                        result, round(confidence, 4), MODEL_METRICS['cnn_accuracy']))
                     conn.commit()
                 log(f"✅ DB saved: {result}")
             except Exception as e:
@@ -224,7 +290,7 @@ def predict_image():
         return jsonify({
             "success": True,
             "result": result,
-            "confidence": confidence,
+            "confidence": confidence_pct,
             "model_accuracy": MODEL_METRICS['cnn_accuracy']
         })
         
