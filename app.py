@@ -131,7 +131,7 @@ def index():
 
 @app.route('/predict_image', methods=['POST'])
 def predict_image():
-    """RGB tabanlı H&E kontrolü + model confidence."""
+    """Texture analizi + model confidence - RENKTEN BAĞIMSIZ."""
     start_time = time.time()
     log(f"📥 /predict_image STARTED")
     
@@ -151,36 +151,31 @@ def predict_image():
         if img.width < 100 or img.height < 100:
             return jsonify({"success": False, "error": "Image too small. Min 100x100px"}), 400
         
-        # ✅ KATMAN 1: RGB Tabanlı H&E Boyama Kontrolü (PIL/OpenCV bağımsız)
+        # ✅ KATMAN 1: Texture Analizi (Renkten Bağımsız)
         try:
             img_array_check = np.array(img)
-            R = img_array_check[:,:,0].astype(float)
-            G = img_array_check[:,:,1].astype(float)
-            B = img_array_check[:,:,2].astype(float)
+            gray = np.mean(img_array_check, axis=2).astype(np.float32)
             
-            # Eosin (Pembe/Kırmızı): R yüksek, G düşük, B orta
-            # H&E boyalı mikroskopide hücre sitoplazması pembe
-            eosin_mask = (R > 150) & (G < 180) & (B > 100) & (R > G) & ((R - B) < 120)
+            # Laplacian kernel - edge detection
+            laplacian = np.abs(
+                -4 * gray[1:-1, 1:-1] + 
+                gray[:-2, 1:-1] + gray[2:, 1:-1] + 
+                gray[1:-1, :-2] + gray[1:-1, 2:]
+            )
+            texture_score = float(np.mean(laplacian))
             
-            # Hematoksil (Mavi/Mor): B yüksek, R orta, G düşük
-            # Hücre çekirdekleri mavi-mor
-            hema_mask = (B > 100) & (B > R) & (B > G) & (R > 50)
+            log(f"🔍 Texture score: {texture_score:.2f}")
             
-            eosin_ratio = np.mean(eosin_mask)
-            hema_ratio = np.mean(hema_mask)
-            he_ratio = eosin_ratio + hema_ratio
-            
-            log(f"🔍 H&E check: eosin={eosin_ratio:.3f}, hema={hema_ratio:.3f}, total={he_ratio:.3f}")
-            
-            # ✅ H&E oranı çok düşükse reddet (logo, manzara, elma vb.)
-            if he_ratio < 0.05:
-                log(f"❌ Low H&E ratio ({he_ratio:.3f}), rejecting non-microscopy image")
+            # ✅ Düşük texture = logo, fotoğraf, çizim (reddet)
+            # Mikroskopi görselleri yüksek texture'a sahip (>10)
+            if texture_score < 8.0:
+                log(f"❌ Low texture ({texture_score:.2f}), rejecting non-microscopy image")
                 return jsonify({
                     "success": False,
                     "error": "Bu görsel bir hantavirüs mikroskopi görüntüsü değil. Lütfen H&E boyalı mikroskopi görüntüsü, hücre preparatı veya doku kesiti yükleyin. Logo, fotoğraf, çizim gibi görseller kabul edilmez."
                 }), 400
         except Exception as e:
-            log(f"⚠️ H&E check failed: {e}, continuing with model only")
+            log(f"⚠️ Texture check failed: {e}, continuing with model only")
         
         # ✅ KATMAN 2: Model Prediction
         img_resized = img.resize((224, 224))
