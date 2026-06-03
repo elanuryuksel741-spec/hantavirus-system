@@ -132,8 +132,8 @@ def index():
 # ✅ ÇOK KATMANLI GÖRÜNTÜ VALIDASYONU
 def validate_microscopy_image(img_pil):
     """
-    Çok katmanlı mikroskopi görüntü validasyonu.
-    Logoları, fotoğrafları ve diğer sahte görselleri reddeder.
+    Dengeli mikroskopi görüntü validasyonu.
+    Gerçek mikroskopi görsellerini kabul eder, logoları reddeder.
     """
     img_array = np.array(img_pil)
     
@@ -142,9 +142,7 @@ def validate_microscopy_image(img_pil):
     h_channel = img_hsv[:,:,0]  # Hue: 0-255 (PIL HSV)
     s_channel = img_hsv[:,:,1]  # Saturation: 0-255
     
-    # H&E boyama karakteristikleri:
-    # - Pembe/Mor: H: 140-200, S: 40-220
-    # - Mavi (çekirdek): H: 100-140, S: 50-200
+    # H&E boyama karakteristikleri
     pink_mask = ((h_channel >= 140) & (h_channel <= 200) & 
                  (s_channel >= 40) & (s_channel <= 220))
     blue_mask = ((h_channel >= 100) & (h_channel <= 140) & 
@@ -152,7 +150,7 @@ def validate_microscopy_image(img_pil):
     
     pink_ratio = np.mean(pink_mask)
     blue_ratio = np.mean(blue_mask)
-    he_stain_ratio = pink_ratio + blue_ratio  # H&E boyama oranı
+    he_stain_ratio = pink_ratio + blue_ratio
     
     # 2. Texture Analizi (Laplacian variance)
     gray = np.mean(img_array, axis=2).astype(np.float32)
@@ -169,24 +167,24 @@ def validate_microscopy_image(img_pil):
     # 4. Kontrast analizi
     contrast = np.std(gray)
     
-    # 5. ✅ YENİ: Beyaz arka plan oranı (logolar genelde beyaz arka planlı)
+    # 5. Beyaz arka plan oranı
     white_mask = (img_array[:,:,0] > 240) & (img_array[:,:,1] > 240) & (img_array[:,:,2] > 240)
     white_ratio = np.mean(white_mask)
     
-    # 6. ✅ YENİ: Renk histogramı düzgünlüğü (logolar az renk kullanır)
+    # 6. Renk histogramı düzgünlüğü
     hist_r = np.histogram(img_array[:,:,0], bins=32)[0]
     hist_g = np.histogram(img_array[:,:,1], bins=32)[0]
     hist_b = np.histogram(img_array[:,:,2], bins=32)[0]
     color_complexity = (np.count_nonzero(hist_r) + np.count_nonzero(hist_g) + np.count_nonzero(hist_b)) / 3
     
-    # ✅ SIKILAŞTIRILMIŞ Karar Kriterleri
+    # ✅ DENGELENMİŞ Karar Kriterleri
     is_valid = (
-        he_stain_ratio > 0.08 and      # 0.03 → 0.08 (daha yüksek H&E oranı)
-        texture_score > 8.0 and         # 3.0 → 8.0 (mikroskopi çok texture'lı)
-        color_std > 40 and              # 25 → 40 (daha fazla renk çeşitliliği)
-        contrast > 50 and               # 30 → 50 (daha yüksek kontrast)
-        white_ratio < 0.30 and          # ✅ YENİ: %30'dan az beyaz arka plan
-        color_complexity > 15           # ✅ YENİ: En az 15 farklı renk tonu
+        he_stain_ratio > 0.05 and      # 0.08 → 0.05 (daha esnek)
+        texture_score > 5.0 and         # 8.0 → 5.0 (daha esnek)
+        color_std > 30 and              # 40 → 30 (daha esnek)
+        contrast > 40 and               # 50 → 40 (daha esnek)
+        white_ratio < 0.40 and          # 0.30 → 0.40 (daha esnek)
+        color_complexity > 12           # 15 → 12 (daha esnek)
     )
     
     metrics = {
