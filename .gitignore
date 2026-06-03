@@ -73,3 +73,5 @@ $RECYCLE.BIN/
 # ================================
 *.tmp~
 *~
+# Security: Config files with sensitive data
+render.yaml

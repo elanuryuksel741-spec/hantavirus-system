@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Real Data Training Pipeline - Stabilized Metrics & Python 3.10 Compatible
+Real Data Training Pipeline - Stabilized Metrics (Fine-Tuning Fix)
 ⚠️ ACADEMIC USE ONLY: Not for clinical diagnosis.
 """
 import os
@@ -51,7 +51,7 @@ x = Dropout(0.4)(x)
 output = Dense(1, activation='sigmoid')(x)
 cnn_model = Model(inputs=base_model.input, outputs=output)
 
-# ✅ Metrik isimleri 'prec' ve 'rec' olarak değiştirildi (Keras çakışması önleme)
+# ✅ FAZ 1: Frozen Base - Metrik objeleri ile compile
 cnn_model.compile(optimizer=keras.optimizers.Adam(1e-3), loss='binary_crossentropy',
                   metrics=['accuracy', keras.metrics.Precision(name='prec'), keras.metrics.Recall(name='rec')])
 
@@ -61,25 +61,26 @@ cbs = [
 ]
 cnn_model.fit(train_gen, epochs=12, validation_data=val_gen, class_weight=class_weights, callbacks=cbs)
 
-# Fine-Tuning
-print("🔓 Fine-tuning last 20 layers...")
+# ✅ FAZ 2: Fine-Tuning - SADECE loss ile compile (metrik çakışmasını önler)
+print("🔓 Fine-tuning last 20 layers (metrics disabled for stability)...")
 base_model.trainable = True
 for layer in base_model.layers[:-20]:
     layer.trainable = False
 
-cnn_model.compile(optimizer=keras.optimizers.Adam(1e-5), loss='binary_crossentropy', metrics=['accuracy', 'prec', 'rec'])
+# ✅ DÜZELTME: Fine-tuning fazında sadece loss kullan, metrikleri kaldır
+cnn_model.compile(optimizer=keras.optimizers.Adam(1e-5), loss='binary_crossentropy')
 cnn_model.fit(train_gen, epochs=6, validation_data=val_gen, class_weight=class_weights, callbacks=cbs)
 
-# 📊 Evaluate
+# 📊 Evaluate on Test Set (Manuel metrik hesaplama - her zaman çalışır)
 print("📈 Computing REAL metrics on test set...")
 y_true = test_gen.classes
 y_pred_proba = cnn_model.predict(test_gen, verbose=0).flatten()
 y_pred = (y_pred_proba >= 0.5).astype(int)
 
 acc = np.mean(y_true == y_pred)
-prec = precision_score(y_true, y_pred)
-rec = recall_score(y_true, y_pred)
-f1 = f1_score(y_true, y_pred)
+prec = precision_score(y_true, y_pred, zero_division=0)
+rec = recall_score(y_true, y_pred, zero_division=0)
+f1 = f1_score(y_true, y_pred, zero_division=0)
 roc_auc = roc_auc_score(y_true, y_pred_proba)
 
 print(f"\n📋 TEST METRICS:")
@@ -90,6 +91,7 @@ print(f"F1-Score : {f1:.4f}")
 print(f"ROC-AUC  : {roc_auc:.4f}")
 print("\n" + classification_report(y_true, y_pred, target_names=['Normal', 'Hantavirus/Viral']))
 
+# 📊 Confusion Matrix Plot
 conf = confusion_matrix(y_true, y_pred)
 plt.figure(figsize=(6,4))
 plt.imshow(conf, interpolation='nearest', cmap=plt.cm.Blues)
@@ -109,6 +111,7 @@ os.makedirs('models', exist_ok=True)
 plt.savefig('models/confusion_matrix.png', dpi=150)
 plt.close()
 
+# 💾 Save CNN
 cnn_model.save('models/hantavirus_cnn.h5')
 print("✅ CNN model saved.")
 
@@ -143,6 +146,7 @@ print(f"✅ RF Accuracy: {rf_acc:.4f} | F1: {rf_f1:.4f}")
 joblib.dump({'model': rf, 'scaler': scaler}, 'models/risk_model.pkl')
 joblib.dump(list(X.columns), 'models/risk_features.pkl')
 
+# 📊 Save metrics to JSON
 metrics = {
     "cnn_accuracy": round(float(acc), 4), "cnn_precision": round(float(prec), 4),
     "cnn_recall": round(float(rec), 4), "cnn_f1": round(float(f1), 4),
