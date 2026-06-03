@@ -29,8 +29,8 @@ def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
     sys.stdout.flush()
 
-# ✅ Render Free Tier RAM Optimizasyonu (TensorFlow'ı LAZY yükle)
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Tüm TF loglarını kapat
+# Render Optimizasyonu
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
 # Initialize Flask app
@@ -38,29 +38,32 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 app.secret_key = os.environ.get('SECRET_KEY', 'hanta_secure_key_2024_change_in_production')
 
-# ✅ LAZY MODEL LOADING: İlk istekte yükle (startup hızlanır)
+# ✅ THREAD-SAFE MODEL LOADING
 cnn_model = None
 model_loaded = False
 model_load_error = None
+model_lock = threading.Lock()
 
 def load_cnn_model():
-    """CNN modelini lazy load eder (ilk istekte çağrılır)."""
+    """Thread-safe CNN model loading."""
     global cnn_model, model_loaded, model_load_error
-    if model_loaded or model_load_error:
-        return
     
-    try:
-        log("🧠 Loading CNN model (lazy load)...")
-        import tensorflow as tf
-        tf.config.threading.set_intra_op_parallelism_threads(1)
-        tf.config.threading.set_inter_op_parallelism_threads(1)
-        from tensorflow.keras.models import load_model
-        cnn_model = load_model('models/hantavirus_cnn.h5', compile=False)
-        model_loaded = True
-        log("✅ CNN model loaded successfully")
-    except Exception as e:
-        model_load_error = str(e)
-        log(f"⚠️ CNN load failed: {e}")
+    with model_lock:
+        if model_loaded or model_load_error:
+            return
+        
+        try:
+            log("🧠 Loading CNN model (lazy load)...")
+            import tensorflow as tf
+            tf.config.threading.set_intra_op_parallelism_threads(1)
+            tf.config.threading.set_inter_op_parallelism_threads(1)
+            from tensorflow.keras.models import load_model
+            cnn_model = load_model('models/hantavirus_cnn.h5', compile=False)
+            model_loaded = True
+            log("✅ CNN model loaded successfully")
+        except Exception as e:
+            model_load_error = str(e)
+            log(f"⚠️ CNN load failed: {e}")
 
 # RF model (lightweight, hemen yükle)
 log("🔧 Loading RF model...")
@@ -117,50 +120,35 @@ def admin_required(f):
 
 @app.route('/')
 def index(): 
-    # ✅ İlk ziyarette CNN modelini yükle (cold start'ta)
     if not model_loaded and not model_load_error:
         load_cnn_model()
     return render_template('index.html')
 
-# ✅ SMART PREDICTION: Gerçek model + akıllı fallback
-def smart_predict(img_array):
-    """Gerçek model + hash-based fallback."""
-    # 1. Gerçek model inference
-    if cnn_model is not None:
-        try:
-            import tensorflow as tf
-            log("🧠 Attempting real model prediction...")
-            with tf.device('/CPU:0'):
-                pred = cnn_model.predict(img_array, verbose=0, batch_size=1)[0][0]
-            confidence = float(1-pred) if pred<0.5 else float(pred)
-            result = "Hantavirus Detected" if pred<0.5 else "Normal Tissue"
-            log(f"✅ Real model prediction: {result} ({confidence*100:.1f}%)")
-            return result, round(confidence*100, 2)
-        except Exception as e:
-            log(f"⚠️ Real model failed: {e}, using smart fallback")
+# ✅ SADECE GERÇEK MODEL, FALLBACK YOK
+def predict_image_model(img_array):
+    """Sadece gerçek TensorFlow modelini kullanır."""
+    if cnn_model is None:
+        raise RuntimeError("CNN model not loaded")
     
-    # 2. Akıllı fallback: Görsel hash tabanlı deterministik sonuç
-    log("🔄 Using smart fallback (image hash-based)")
-    img_bytes = img_array.tobytes()[:1000]
-    img_hash = hash(img_bytes)
+    import tensorflow as tf
+    log("🧠 Running real model prediction...")
     
-    if img_hash % 3 == 0:
-        result = "Normal Tissue"
-        confidence = 85 + (abs(img_hash) % 10)
-    else:
-        result = "Hantavirus Detected"
-        confidence = 90 + (abs(img_hash) % 8)
+    with tf.device('/CPU:0'):
+        pred = cnn_model.predict(img_array, verbose=0, batch_size=1)[0][0]
     
-    log(f"🔄 Smart fallback: {result} ({confidence}%)")
-    return result, confidence
+    confidence = float(1-pred) if pred<0.5 else float(pred)
+    result = "Hantavirus Detected" if pred<0.5 else "Normal Tissue"
+    
+    log(f"✅ Model prediction: {result} ({confidence*100:.1f}%)")
+    return result, round(confidence*100, 2)
 
 @app.route('/predict_image', methods=['POST'])
 def predict_image():
-    """✅ HYBRID: Gerçek model + akıllı fallback."""
+    """✅ SADECE GERÇEK MODEL, sahte görseller reddedilir."""
     start_time = time.time()
     log(f"📥 /predict_image STARTED")
     
-    # ✅ Lazy load CNN model (ilk istekte)
+    # Lazy load CNN model
     if not model_loaded and not model_load_error:
         load_cnn_model()
     
@@ -179,19 +167,34 @@ def predict_image():
         
         img_resized = img.resize((224, 224))
         
-        # ✅ TensorFlow import sadece gerektiğinde
         import tensorflow as tf
         from tensorflow.keras.preprocessing import image as keras_image
         img_array = keras_image.img_to_array(img_resized) / 255.0
         img_array = np.expand_dims(img_array, axis=0)
         log(f"✅ Preprocessed: shape={img_array.shape}")
         
-        result, confidence = smart_predict(img_array)
-        
-        if confidence < 60:
+        # ✅ SADECE GERÇEK MODEL (fallback yok)
+        if cnn_model is None:
             return jsonify({
                 "success": False,
-                "error": "Görsel hantavirüs mikroskopi verisine benzemiyor."
+                "error": "Model yüklenemedi. Lütfen daha sonra tekrar deneyin."
+            }), 503
+        
+        try:
+            result, confidence = predict_image_model(img_array)
+        except Exception as e:
+            log(f"❌ Model prediction failed: {e}")
+            return jsonify({
+                "success": False,
+                "error": "Model analizi başarısız oldu. Lütfen tekrar deneyin."
+            }), 500
+        
+        # ✅ YÜKSEK CONFIDENCE THRESHOLD (sahte görselleri reddet)
+        if confidence < 75:  # 60% → 75% yükseltildi
+            log(f"⚠️ Low confidence ({confidence}%), rejecting image")
+            return jsonify({
+                "success": False,
+                "error": "Bu görsel hantavirüs mikroskopi verisine benzemiyor. Lütfen uygun bir laboratuvar görseli yükleyin (mikroskopi görüntüsü, hücre preparatı vb.)."
             }), 400
         
         # ✅ Async DB save
@@ -233,7 +236,7 @@ def predict_image():
 
 @app.route('/predict_risk', methods=['POST'])
 def predict_risk():
-    """Çevresel risk - RF model (lightweight)."""
+    """Çevresel risk - RF model."""
     try:
         data = request.get_json()
         if not data: return jsonify({"success":False,"error":"No data"}),400
@@ -337,7 +340,6 @@ def logout(): session.clear(); return redirect(url_for('index'))
 
 @app.route('/health')
 def health():
-    """✅ Keep-alive endpoint: Servisi uyanık tutmak için kullanılır."""
     status={
         "status":"ok",
         "models_loaded": model_loaded,

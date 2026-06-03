@@ -5,14 +5,14 @@
     plan: free
     region: frankfurt
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --workers 1 --threads 2 --timeout 120 --log-file -
+    startCommand: gunicorn app:app --workers 1 --threads 2 --timeout 180 --log-file -
     envVars:
       - key: PYTHON_VERSION
         value: "3.10.11"
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: TF_CPP_MIN_LOG_LEVEL
-        value: "2"
+        value: "3"
       - key: SECRET_KEY
         value: "hanta_deploy_key_2024"
       - key: DATABASE_URL
