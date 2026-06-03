@@ -45,10 +45,15 @@ model_load_error = None
 model_lock = threading.Lock()
 
 def load_cnn_model():
-    """Thread-safe CNN model loading."""
+    """Thread-safe CNN model loading with proper global handling."""
     global cnn_model, model_loaded, model_load_error
     
+    # Double-check locking pattern
+    if model_loaded or model_load_error:
+        return
+    
     with model_lock:
+        # Tekrar kontrol et (başka thread yüklemiş olabilir)
         if model_loaded or model_load_error:
             return
         
@@ -127,8 +132,8 @@ def index():
 # ✅ ÇOK KATMANLI GÖRÜNTÜ VALIDASYONU
 def validate_microscopy_image(img_pil):
     """
-    Görüntünün mikroskopi görseli olup olmadığını kontrol eder.
-    H&E boyama karakteristiklerini, texture ve renk çeşitliliğini analiz eder.
+    Çok katmanlı mikroskopi görüntü validasyonu.
+    Logoları, fotoğrafları ve diğer sahte görselleri reddeder.
     """
     img_array = np.array(img_pil)
     
@@ -151,7 +156,6 @@ def validate_microscopy_image(img_pil):
     
     # 2. Texture Analizi (Laplacian variance)
     gray = np.mean(img_array, axis=2).astype(np.float32)
-    # Basit Laplacian kernel
     laplacian = np.abs(
         -4 * gray[1:-1, 1:-1] + 
         gray[:-2, 1:-1] + gray[2:, 1:-1] + 
@@ -165,12 +169,24 @@ def validate_microscopy_image(img_pil):
     # 4. Kontrast analizi
     contrast = np.std(gray)
     
-    # ✅ Karar Kriterleri
+    # 5. ✅ YENİ: Beyaz arka plan oranı (logolar genelde beyaz arka planlı)
+    white_mask = (img_array[:,:,0] > 240) & (img_array[:,:,1] > 240) & (img_array[:,:,2] > 240)
+    white_ratio = np.mean(white_mask)
+    
+    # 6. ✅ YENİ: Renk histogramı düzgünlüğü (logolar az renk kullanır)
+    hist_r = np.histogram(img_array[:,:,0], bins=32)[0]
+    hist_g = np.histogram(img_array[:,:,1], bins=32)[0]
+    hist_b = np.histogram(img_array[:,:,2], bins=32)[0]
+    color_complexity = (np.count_nonzero(hist_r) + np.count_nonzero(hist_g) + np.count_nonzero(hist_b)) / 3
+    
+    # ✅ SIKILAŞTIRILMIŞ Karar Kriterleri
     is_valid = (
-        he_stain_ratio > 0.03 and      # En az %3 H&E boyalı piksel
-        texture_score > 3.0 and         # Yeterli texture (hücre yapıları)
-        color_std > 25 and              # Renk çeşitliliği (düz renkli logoları reddet)
-        contrast > 30                   # Yeterli kontrast
+        he_stain_ratio > 0.08 and      # 0.03 → 0.08 (daha yüksek H&E oranı)
+        texture_score > 8.0 and         # 3.0 → 8.0 (mikroskopi çok texture'lı)
+        color_std > 40 and              # 25 → 40 (daha fazla renk çeşitliliği)
+        contrast > 50 and               # 30 → 50 (daha yüksek kontrast)
+        white_ratio < 0.30 and          # ✅ YENİ: %30'dan az beyaz arka plan
+        color_complexity > 15           # ✅ YENİ: En az 15 farklı renk tonu
     )
     
     metrics = {
@@ -179,14 +195,16 @@ def validate_microscopy_image(img_pil):
         'blue_ratio': blue_ratio,
         'texture_score': texture_score,
         'color_std': color_std,
-        'contrast': contrast
+        'contrast': contrast,
+        'white_ratio': white_ratio,
+        'color_complexity': color_complexity
     }
     
     log(f"🔍 Image validation: HE={he_stain_ratio:.3f}, Texture={texture_score:.2f}, "
-        f"ColorStd={color_std:.2f}, Contrast={contrast:.2f} → {'✅ Valid' if is_valid else '❌ Invalid'}")
+        f"ColorStd={color_std:.2f}, Contrast={contrast:.2f}, White={white_ratio:.3f}, "
+        f"Complexity={color_complexity:.1f} → {'✅ Valid' if is_valid else '❌ Invalid'}")
     
     return is_valid, metrics
-
 @app.route('/predict_image', methods=['POST'])
 def predict_image():
     """✅ ÇOK KATMANLI: Görüntü validasyonu + gerçek model."""
