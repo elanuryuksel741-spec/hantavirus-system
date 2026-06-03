@@ -131,7 +131,7 @@ def index():
 
 @app.route('/predict_image', methods=['POST'])
 def predict_image():
-    """Sadece model confidence threshold kullan - validasyon YOK."""
+    """Model confidence + basit H&E kontrolü."""
     start_time = time.time()
     log(f"📥 /predict_image STARTED")
     
@@ -151,6 +151,32 @@ def predict_image():
         if img.width < 100 or img.height < 100:
             return jsonify({"success": False, "error": "Image too small. Min 100x100px"}), 400
         
+        # ✅ KATMAN 1: Basit H&E Boyama Kontrolü
+        try:
+            img_hsv = np.array(img.convert('HSV'))
+            h_channel = img_hsv[:,:,0]
+            s_channel = img_hsv[:,:,1]
+            
+            # Pembe/Mor (H&E boyama)
+            pink_mask = ((h_channel >= 140) & (h_channel <= 200) & 
+                        (s_channel >= 40) & (s_channel <= 220))
+            blue_mask = ((h_channel >= 100) & (h_channel <= 140) & 
+                        (s_channel >= 50) & (s_channel <= 200))
+            
+            he_ratio = np.mean(pink_mask) + np.mean(blue_mask)
+            log(f"🔍 H&E ratio: {he_ratio:.3f}")
+            
+            # ✅ H&E oranı çok düşükse reddet (logo, elma vb.)
+            if he_ratio < 0.03:
+                log(f"❌ Low H&E ratio ({he_ratio:.3f}), rejecting")
+                return jsonify({
+                    "success": False,
+                    "error": "Bu görsel bir hantavirüs mikroskopi görüntüsü değil. Lütfen H&E boyalı mikroskopi görüntüsü yükleyin."
+                }), 400
+        except Exception as e:
+            log(f"⚠️ H&E check failed: {e}, continuing with model only")
+        
+        # ✅ KATMAN 2: Model Prediction
         img_resized = img.resize((224, 224))
         
         import tensorflow as tf
@@ -172,8 +198,8 @@ def predict_image():
         
         log(f"✅ Model prediction: {result} ({confidence_pct}%)")
         
-        # ✅ YÜKSEK CONFIDENCE THRESHOLD (85%)
-        if confidence_pct < 85:
+        # ✅ YÜKSEK CONFIDENCE THRESHOLD (90%)
+        if confidence_pct < 90:
             log(f"⚠️ Low confidence ({confidence_pct}%), rejecting")
             return jsonify({
                 "success": False,
@@ -216,6 +242,8 @@ def predict_image():
         import traceback
         log(traceback.format_exc())
         return jsonify({"success": False, "error": f"Processing error: {str(e)}"}), 500
+    
+    
 @app.route('/predict_risk', methods=['POST'])
 def predict_risk():
     """Çevresel risk - RF model."""
