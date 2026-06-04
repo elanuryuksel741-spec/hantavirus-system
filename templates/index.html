@@ -15,19 +15,19 @@
         .drag-over { border: 3px dashed #0ea5e9 !important; background: #f0f9ff !important; }
     </style>
 </head>
-<body class="bg-gradient-to-br from-emerald-400 via-sky-500 to-violet-600 min-h-screen">
-    <div class="max-w-4xl mx-auto px-4 py-8">
+<body class="min-h-screen relative" style="background: linear-gradient(135deg, rgba(52, 211, 153, 0.25), rgba(14, 165, 233, 0.25), rgba(139, 92, 246, 0.25)), url('/static/images/background.jpeg') center/cover no-repeat fixed;">
+    <div class="max-w-4xl mx-auto px-4 py-8 relative z-10">
         <!-- Header -->
         <header class="text-center mb-8">
-            <h1 class="text-4xl font-bold text-gray-800 tracking-tight mb-2">🦠 Hantavirüs Analiz Sistemi</h1>
-            <p class="text-gray-600 leading-relaxed">Çift Modül: Görsel Mikroskopi + Çevresel Risk Değerlendirmesi</p>
-            <a href="/login" class="inline-flex items-center mt-3 text-sm text-gray-700 hover:text-gray-900 transition">
+            <h1 class="text-4xl font-bold text-gray-800 tracking-tight mb-2 drop-shadow-lg">🦠 Hantavirüs Analiz Sistemi</h1>
+            <p class="text-gray-800 leading-relaxed font-medium drop-shadow">Çift Modül: Görsel Mikroskopi + Çevresel Risk Değerlendirmesi</p>
+            <a href="/login" class="inline-flex items-center mt-3 text-sm text-gray-800 hover:text-gray-900 transition font-medium">
                 🛡️ Yönetici Paneli
             </a>
         </header>
 
         <!-- Main Card -->
-        <div class="bg-white/90 backdrop-blur-md rounded-2xl shadow-2xl border border-white/20 p-6 mb-6">
+        <div class="bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-white/30 p-6 mb-6">
             <!-- Tabs -->
             <div class="flex border-b border-gray-200 mb-6">
                 <button id="tab-image" class="tab-active flex-1 py-3 px-4 text-center transition" onclick="switchTab('image')">
@@ -41,10 +41,10 @@
             <!-- Image Analysis Tab -->
             <div id="panel-image" class="tab-content">
                 <h2 class="text-2xl font-bold text-gray-800 tracking-tight mb-4">Mikroskopi Görseli Yükle</h2>
-                <p class="text-gray-600 leading-relaxed mb-4">Hantavirüs şüpheli doku örneklerinizi analiz edin. Desteklenen formatlar: JPG, JPEG, PNG (min. 100x100px)</p>
+                <p class="text-gray-700 leading-relaxed mb-4 font-medium">Hantavirüs şüpheli doku örneklerinizi analiz edin. Desteklenen formatlar: JPG, JPEG, PNG (min. 100x100px)</p>
                 
                 <!-- Drop Zone -->
-                <div id="drop-zone" class="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-sky-400 transition bg-gray-50">
+                <div id="drop-zone" class="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-sky-400 transition bg-gray-50/80">
                     <input type="file" id="image-input" accept="image/jpeg,image/png,image/jpg" class="hidden">
                     <div id="drop-placeholder">
                         <span class="text-4xl mb-2 block">📷</span>
@@ -61,7 +61,7 @@
                 <!-- Loading -->
                 <div id="image-loading" class="hidden text-center py-6">
                     <div class="animate-spin inline-block w-8 h-8 border-4 border-sky-300 border-t-sky-600 rounded-full"></div>
-                    <p class="text-gray-600 mt-2">Model analiz ediyor...</p>
+                    <p class="text-gray-700 mt-2 font-medium">Model analiz ediyor...</p>
                 </div>
 
                 <!-- Result -->
@@ -71,12 +71,12 @@
             <!-- Environmental Risk Tab -->
             <div id="panel-risk" class="tab-content hidden">
                 <h2 class="text-2xl font-bold text-gray-800 tracking-tight mb-4">Çevresel Risk Değerlendirmesi</h2>
-                <p class="text-gray-600 leading-relaxed mb-6">Bölgenizdeki hantavirüs kapma olasılığını 6 soru ile hesaplayın.</p>
+                <p class="text-gray-700 leading-relaxed mb-6 font-medium">Bölgenizdeki hantavirüs kapma olasılığını 6 soru ile hesaplayın.</p>
                 
                 <form id="risk-form" class="space-y-4">
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">
-                            Bölgeniz <span class="text-gray-400 font-normal">(0: Avrupa/Türkiye, 1: Asya, 2: Amerika, 3: Diğer)</span>
+                        <label class="block text-sm font-medium text-gray-800 mb-1">
+                            Bölgeniz <span class="text-gray-600 font-normal">(0: Avrupa/Türkiye, 1: Asya, 2: Amerika, 3: Diğer)</span>
                         </label>
                         <select name="region" required class="bg-gray-50 border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-sky-300 focus:border-sky-400 transition-all outline-none w-full">
                             <option value="0">Avrupa/Türkiye</option>
@@ -86,27 +86,27 @@
                         </select>
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">
-                            Ortalama Günlük Sıcaklık (°C) <span class="text-gray-400 font-normal">(Hava durumu uygulamasından bakınız. Örn: 15-30)</span>
+                        <label class="block text-sm font-medium text-gray-800 mb-1">
+                            Ortalama Günlük Sıcaklık (°C) <span class="text-gray-600 font-normal">(Hava durumu uygulamasından bakınız. Örn: 15-30)</span>
                         </label>
                         <input type="number" name="temperature" step="0.1" min="-10" max="50" required placeholder="Örn: 22.5" class="bg-gray-50 border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-sky-300 focus:border-sky-400 transition-all outline-none w-full">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">
-                            Ortalama Nem (%) <span class="text-gray-400 font-normal">(Hava durumu uygulaması veya ev nem ölçeri. Örn: 40-80)</span>
+                        <label class="block text-sm font-medium text-gray-800 mb-1">
+                            Ortalama Nem (%) <span class="text-gray-600 font-normal">(Hava durumu uygulaması veya ev nem ölçeri. Örn: 40-80)</span>
                         </label>
                         <input type="number" name="humidity" min="0" max="100" required placeholder="Örn: 65" class="bg-gray-50 border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-sky-300 focus:border-sky-400 transition-all outline-none w-full">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">
-                            Kemirgen (Fare/Sıçan) Gözlem Puanı 1-10 <span class="text-gray-400 font-normal">(1: Hiç yok, 5: Ara sıra, 10: Çiftlik/Orman kenarı/Çok sık)</span>
+                        <label class="block text-sm font-medium text-gray-800 mb-1">
+                            Kemirgen (Fare/Sıçan) Gözlem Puanı 1-10 <span class="text-gray-600 font-normal">(1: Hiç yok, 5: Ara sıra, 10: Çiftlik/Orman kenarı/Çok sık)</span>
                         </label>
                         <input type="range" name="rodent_score" min="1" max="10" value="5" class="w-full" oninput="document.getElementById('rodent-val').textContent=this.value">
-                        <div class="text-center text-sm text-gray-600">Seçilen: <span id="rodent-val" class="font-semibold text-sky-600">5</span>/10</div>
+                        <div class="text-center text-sm text-gray-700">Seçilen: <span id="rodent-val" class="font-semibold text-sky-600">5</span>/10</div>
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">
-                            Yaşadığınız Yerleşim <span class="text-gray-400 font-normal">(0: Şehir/İlçe Merkezi, 1: Köy/Tarla/Orman Kenarı/Kırsal)</span>
+                        <label class="block text-sm font-medium text-gray-800 mb-1">
+                            Yaşadığınız Yerleşim <span class="text-gray-600 font-normal">(0: Şehir/İlçe Merkezi, 1: Köy/Tarla/Orman Kenarı/Kırsal)</span>
                         </label>
                         <select name="is_rural" required class="bg-gray-50 border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-sky-300 focus:border-sky-400 transition-all outline-none w-full">
                             <option value="0">Şehir/İlçe Merkezi</option>
@@ -114,8 +114,8 @@
                         </select>
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">
-                            Son 1 Yılda Bölgesel Hantavirüs Uyarısı <span class="text-gray-400 font-normal">(0: Duymadım, 1: Resmi haber/duyuru aldım)</span>
+                        <label class="block text-sm font-medium text-gray-800 mb-1">
+                            Son 1 Yılda Bölgesel Hantavirüs Uyarısı <span class="text-gray-600 font-normal">(0: Duymadım, 1: Resmi haber/duyuru aldım)</span>
                         </label>
                         <select name="has_warning" required class="bg-gray-50 border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-sky-300 focus:border-sky-400 transition-all outline-none w-full">
                             <option value="0">Duymadım</option>
@@ -131,7 +131,7 @@
                 <!-- Loading -->
                 <div id="risk-loading" class="hidden text-center py-6">
                     <div class="animate-spin inline-block w-8 h-8 border-4 border-sky-300 border-t-sky-600 rounded-full"></div>
-                    <p class="text-gray-600 mt-2">Risk modeli çalışıyor...</p>
+                    <p class="text-gray-700 mt-2 font-medium">Risk modeli çalışıyor...</p>
                 </div>
 
                 <!-- Result -->
@@ -140,7 +140,7 @@
         </div>
 
         <!-- Legal Footer -->
-        <footer class="text-xs text-gray-500 text-center py-4 border-t border-white/20">
+        <footer class="text-xs text-gray-800 text-center py-4 border-t border-white/30 font-medium drop-shadow">
             ⚠️ Bu sistem tıbbi tanı veya tedavi aracı değildir. Yalnızca eğitim ve demo amaçlıdır. Kesin sonuçlar için yetkili sağlık kuruluşlarına başvurunuz. KVKK/GDPR uyumlu olarak sadece analiz amaçlı önbellek tutulur.
         </footer>
     </div>
