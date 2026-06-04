@@ -172,16 +172,16 @@ def predict_image():
             log(f"🔍 Validation: texture={texture_score:.2f}, white_ratio={white_ratio:.3f}")
             
             # ✅ KARAR 1: Texture düşük → REDDET
-            if texture_score < 8.0:
-                log(f"❌ Low texture ({texture_score:.2f} < 8.0), rejecting")
+            if texture_score < 7.0:
+                log(f"❌ Low texture ({texture_score:.2f} < 7.0), rejecting")
                 return jsonify({
                     "success": False,
                     "error": "Bu görsel bir hantavirüs mikroskopi görüntüsü değil. Lütfen H&E boyalı mikroskopi görüntüsü, hücre preparatı veya doku kesiti yükleyin. Logo, fotoğraf, çizim gibi görseller kabul edilmez."
                 }), 400
             
             # ✅ KARAR 2: Beyaz alan fazla → REDDET
-            if white_ratio > 0.35:
-                log(f"❌ Too much white background ({white_ratio:.3f} > 0.35), rejecting")
+            if white_ratio > 0.60:
+                log(f"❌ Too much white background ({white_ratio:.3f} > 0.60), rejecting")
                 return jsonify({
                     "success": False,
                     "error": "Bu görsel bir hantavirüs mikroskopi görüntüsü değil. Lütfen H&E boyalı mikroskopi görüntüsü, hücre preparatı veya doku kesiti yükleyin. Logo, fotoğraf, çizim gibi görseller kabul edilmez."
