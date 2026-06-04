@@ -75,3 +75,7 @@ $RECYCLE.BIN/
 *~
 # Security: Config files with sensitive data
 render.yaml
+
+# real_data klasörünü ignore et ama golden_samples hariç
+real_data/
+!real_data/test/golden_samples/
