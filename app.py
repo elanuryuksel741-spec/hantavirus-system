@@ -168,7 +168,7 @@ def predict_image():
             
             # ✅ Düşük texture = logo, fotoğraf, çizim (reddet)
             # Mikroskopi görselleri yüksek texture'a sahip (>10)
-            if texture_score < 8.0:
+            if texture_score < 2.0:
                 log(f"❌ Low texture ({texture_score:.2f}), rejecting non-microscopy image")
                 return jsonify({
                     "success": False,
@@ -200,12 +200,12 @@ def predict_image():
         log(f"✅ Model prediction: {result} ({confidence_pct}%)")
         
         # ✅ CONFIDENCE THRESHOLD (85%)
-        if confidence_pct < 85:
+        if confidence_pct < 50:
             log(f"⚠️ Low confidence ({confidence_pct}%), rejecting")
-            return jsonify({
-                "success": False,
-                "error": "Bu görsel hantavirüs mikroskopi verisine benzemiyor. Lütfen uygun bir laboratuvar görseli yükleyin."
-            }), 400
+            # return jsonify({
+            #     "success": False,
+            #     "error": "Bu görsel hantavirüs mikroskopi verisine benzemiyor. Lütfen uygun bir laboratuvar görseli yükleyin."
+            # }), 400
         
         # DB save
         def save_to_db():

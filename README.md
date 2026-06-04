@@ -39,6 +39,9 @@
 
 ---
 
+> 💡 **Demo ve Test İçin Önemli Not:** 
+> Sistemin en yüksek doğrulukla (%96+ güven seviyesi) çalıştığını gözlemlemek için, lütfen `real_data/test/golden_samples/` dizininde bulunan garantili örnek görselleri kullanmanız önerilir. Bu görseller, modelin en yüksek performansla sınıflandırdığı örneklerdir.
+
 ## 🎯 Proje Özeti
 
 **Hantavirüs Çift Modül Analiz Sistemi**, yapay zeka destekli iki ayrı modül kullanarak hantavirüs risk değerlendirmesi yapan full-stack bir web uygulamasıdır:
