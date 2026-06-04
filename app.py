@@ -168,7 +168,7 @@ def predict_image():
             
             # ✅ Düşük texture = logo, fotoğraf, çizim (reddet)
             # Mikroskopi görselleri yüksek texture'a sahip (>10)
-            if texture_score < 2.0:
+            if texture_score < 6.0:
                 log(f"❌ Low texture ({texture_score:.2f}), rejecting non-microscopy image")
                 return jsonify({
                     "success": False,
